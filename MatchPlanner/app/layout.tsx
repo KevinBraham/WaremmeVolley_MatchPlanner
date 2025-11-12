@@ -4,6 +4,9 @@ import { Header } from '@/components/Header';
 export const metadata = {
   title: 'Waremme Volley - Match Planner',
   description: 'Planification des événements et tâches pour Waremme Volley',
+};
+
+export const viewport = {
   themeColor: '#002040',
 };
 

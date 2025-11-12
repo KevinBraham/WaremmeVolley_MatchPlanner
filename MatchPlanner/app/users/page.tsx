@@ -3,7 +3,7 @@
 import { useEffect, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/hooks/useAuth';
-import { getAllUserProfiles, createUserProfile, deleteUserProfile, updateUserProfile } from '@/lib/supabase/queries';
+import { getAllUserProfiles } from '@/lib/supabase/queries';
 import { supabase } from '@/lib/supabaseClient';
 import type { UserProfile } from '@/lib/types/database';
 import { formatUserName } from '@/lib/utils/user';
@@ -16,19 +16,17 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState('');
-  const [newUserDisplayName, setNewUserDisplayName] = useState('');
   const [newUserFirstName, setNewUserFirstName] = useState('');
   const [newUserLastName, setNewUserLastName] = useState('');
-const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
+  const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [editValues, setEditValues] = useState({
-    display_name: '',
     first_name: '',
     last_name: '',
-  role: 'agent' as 'agent' | 'admin',
+    role: 'agent' as 'agent' | 'admin',
   });
   const [updating, setUpdating] = useState(false);
 
@@ -70,67 +68,30 @@ const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
     setCreating(true);
 
     try {
-      // Note: La création d'utilisateurs nécessite l'API Admin de Supabase
-      // Pour l'instant, on utilise signUp qui enverra un email de confirmation
-      // L'utilisateur devra ensuite définir son mot de passe via le lien reçu
-      
       const firstName = newUserFirstName.trim() || null;
       const lastName = newUserLastName.trim() || null;
-      const displayNameCandidate = newUserDisplayName.trim() || `${firstName || ''} ${lastName || ''}`.trim();
-      const fallbackDisplayName = newUserEmail.split('@')[0];
-      const displayName = displayNameCandidate || fallbackDisplayName;
-
-      // Utiliser signUp pour créer un nouvel utilisateur
-      // Cela enverra automatiquement un email de confirmation
-      const { data, error: authError } = await supabase.auth.signUp({
-        email: newUserEmail,
-        password: Math.random().toString(36).slice(-12) + Math.random().toString(36).slice(-12) + 'A1!', // Mot de passe temporaire
-        options: {
-          data: {
-            display_name: displayName,
-            first_name: firstName,
-            last_name: lastName,
-          },
-          emailRedirectTo: `${window.location.origin}/set-password`,
-        },
+      const response = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: newUserEmail,
+          firstName,
+          lastName,
+          role: newUserRole,
+        }),
       });
 
-      if (authError) {
-        setError(authError.message);
-        setCreating(false);
-        return;
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || 'Erreur lors de la création de l’utilisateur');
       }
 
-      if (!data.user) {
-        setError('Erreur lors de la création de l\'utilisateur');
-        setCreating(false);
-        return;
-      }
-
-      // Créer le profil utilisateur
-      await createUserProfile({
-        user_id: data.user.id,
-        display_name: displayName,
-        first_name: firstName,
-        last_name: lastName,
-        role: newUserRole,
-      });
-
-      // Envoyer un email de réinitialisation pour que l'utilisateur puisse définir son mot de passe
-      await supabase.auth.resetPasswordForEmail(newUserEmail, {
-        redirectTo: `${window.location.origin}/set-password`,
-      });
-
-      // Réinitialiser le formulaire et recharger la liste
       setNewUserEmail('');
-      setNewUserDisplayName('');
       setNewUserFirstName('');
       setNewUserLastName('');
       setShowCreateForm(false);
       setNewUserRole('agent');
       await loadUsers();
-      
-      alert(`Un email a été envoyé à ${newUserEmail} pour définir le mot de passe`);
     } catch (err: any) {
       setError(err.message || 'Une erreur est survenue');
     } finally {
@@ -143,16 +104,19 @@ const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
     if (!confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ?')) {
       return;
     }
-
     setDeleting(userId);
     try {
-      // Supprimer le profil utilisateur
-      await deleteUserProfile(userId);
-      
-      // Supprimer l'utilisateur de Supabase Auth
-      // Note: Cela nécessite les fonctions admin de Supabase
-      // Pour l'instant, on supprime juste le profil
-      
+      const response = await fetch('/api/users', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || 'Une erreur est survenue lors de la suppression');
+      }
+
       await loadUsers();
     } catch (err: any) {
       setError(err.message || 'Une erreur est survenue lors de la suppression');
@@ -164,7 +128,6 @@ const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
   function startEditingUser(user: UserProfile) {
     setEditingUser(user);
     setEditValues({
-      display_name: user.display_name || '',
       first_name: user.first_name || '',
       last_name: user.last_name || '',
     role: user.role || 'agent',
@@ -182,12 +145,22 @@ const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
     setError(null);
 
     try {
-      await updateUserProfile(editingUser.user_id, {
-        display_name: editValues.display_name.trim() || null,
-        first_name: editValues.first_name.trim() || null,
-        last_name: editValues.last_name.trim() || null,
-        role: editValues.role,
+      const response = await fetch('/api/users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: editingUser.user_id,
+          firstName: editValues.first_name.trim() || null,
+          lastName: editValues.last_name.trim() || null,
+          role: editValues.role,
+        }),
       });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || 'Erreur lors de la mise à jour du profil');
+      }
+
       await loadUsers();
       setEditingUser(null);
     } catch (err: any) {
@@ -288,22 +261,6 @@ const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
               </div>
             </div>
             <div>
-              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
-                Nom d'affichage
-              </label>
-              <input
-                id="name"
-                type="text"
-                value={newUserDisplayName}
-                onChange={(e) => setNewUserDisplayName(e.target.value)}
-                placeholder="Nom d'affichage (optionnel)"
-                className="input"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Si non renseigné, le nom sera dérivé de l'email
-              </p>
-            </div>
-            <div>
               <label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-2">
                 Rôle *
               </label>
@@ -331,7 +288,6 @@ const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
                 onClick={() => {
                   setShowCreateForm(false);
                   setNewUserEmail('');
-                  setNewUserDisplayName('');
                   setNewUserFirstName('');
                   setNewUserLastName('');
                   setNewUserRole('agent');
@@ -358,7 +314,6 @@ const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Nom complet</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Prénom</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Nom</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Nom d'affichage</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Rôle</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">ID utilisateur</th>
                   <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">Actions</th>
@@ -375,9 +330,6 @@ const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
                     </td>
                     <td className="py-3 px-4 text-sm text-gray-700">
                       {user.last_name || '—'}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-gray-700">
-                      {user.display_name || '—'}
                     </td>
                     <td className="py-3 px-4 text-sm text-gray-700">
                       {user.role === 'admin' ? 'Administrateur' : 'Agent'}
@@ -458,19 +410,6 @@ const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
               </div>
             </div>
             <div>
-              <label htmlFor="editDisplayName" className="block text-sm font-medium text-gray-700 mb-2">
-                Nom d'affichage
-              </label>
-              <input
-                id="editDisplayName"
-                type="text"
-                value={editValues.display_name}
-                onChange={(e) => setEditValues((prev) => ({ ...prev, display_name: e.target.value }))}
-                placeholder="Nom d'affichage"
-                className="input"
-              />
-            </div>
-            <div>
               <label htmlFor="editRole" className="block text-sm font-medium text-gray-700 mb-2">
                 Rôle *
               </label>
@@ -499,7 +438,7 @@ const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
                 type="button"
                 onClick={() => {
                   setEditingUser(null);
-                  setEditValues({ display_name: '', first_name: '', last_name: '', role: 'agent' });
+                  setEditValues({ first_name: '', last_name: '', role: 'agent' });
                 }}
                 className="btn-secondary"
               >

@@ -84,12 +84,45 @@ export function useAuth() {
     setProfile(null);
   }
 
+  async function refresh() {
+    setLoading(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const sessionUser = data.session?.user ?? null;
+      setUser(sessionUser);
+
+      if (sessionUser) {
+        try {
+          let userProfile = await getUserProfile(sessionUser.id);
+          if (!userProfile) {
+            const derived = deriveNamesFromEmail(sessionUser.email || '');
+            userProfile = await createUserProfile({
+              user_id: sessionUser.id,
+              display_name: derived.display_name,
+              first_name: derived.first_name,
+              last_name: derived.last_name,
+              role: 'agent',
+            });
+          }
+          setProfile(userProfile);
+        } catch (error) {
+          console.error('Erreur lors du rafraîchissement du profil:', error);
+        }
+      } else {
+        setProfile(null);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return {
     user,
     profile,
     loading,
     signOut,
     isAuthenticated: !!user,
+    refresh,
   };
 }
 
