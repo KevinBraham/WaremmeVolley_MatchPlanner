@@ -4,12 +4,13 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import type { User } from '@supabase/supabase-js';
 import { getUserProfile, createUserProfile } from '@/lib/supabase/queries';
+import type { UserProfile } from '@/lib/types/database';
 import { deriveNamesFromEmail } from '@/lib/utils/user';
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [profile, setProfile] = useState<any>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -28,6 +29,7 @@ export function useAuth() {
             display_name: derived.display_name,
             first_name: derived.first_name,
             last_name: derived.last_name,
+            role: 'agent',
           });
         }
         

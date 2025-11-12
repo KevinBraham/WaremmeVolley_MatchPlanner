@@ -8,7 +8,8 @@ import type { EventTemplate } from '@/lib/types/database';
 import Link from 'next/link';
 
 export default function TemplatesPage() {
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { profile, isAuthenticated, loading: authLoading } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const router = useRouter();
   const [templates, setTemplates] = useState<EventTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,6 +38,7 @@ export default function TemplatesPage() {
   }
 
   async function handleDelete(id: string) {
+    if (!isAdmin) return;
     if (!confirm('Êtes-vous sûr de vouloir supprimer ce modèle ?')) {
       return;
     }
@@ -99,13 +101,15 @@ export default function TemplatesPage() {
                 >
                   Modifier
                 </Link>
-                <button
-                  onClick={() => handleDelete(template.id)}
-                  disabled={deleting === template.id}
-                  className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50"
-                >
-                  {deleting === template.id ? 'Suppression...' : 'Supprimer'}
-                </button>
+                {isAdmin && (
+                  <button
+                    onClick={() => handleDelete(template.id)}
+                    disabled={deleting === template.id}
+                    className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50"
+                  >
+                    {deleting === template.id ? 'Suppression...' : 'Supprimer'}
+                  </button>
+                )}
               </div>
             </div>
           ))}

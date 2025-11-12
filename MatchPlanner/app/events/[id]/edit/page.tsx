@@ -14,7 +14,7 @@ import Link from 'next/link';
 export default function EditEventPage() {
   const params = useParams();
   const router = useRouter();
-  const { user, isAuthenticated, loading: authLoading } = useAuth();
+  const { user, profile, isAuthenticated, loading: authLoading } = useAuth();
   const [event, setEvent] = useState<EventWithDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -28,6 +28,7 @@ export default function EditEventPage() {
     alertDelay: string;
     responsible: string;
   } | null>(null);
+  const isAdmin = profile?.role === 'admin';
   
   const [formData, setFormData] = useState({
     name: '',
@@ -128,6 +129,7 @@ export default function EditEventPage() {
   }
 
   async function handleDeletePost(postId: string) {
+    if (!isAdmin) return;
     if (!confirm('Êtes-vous sûr de vouloir supprimer ce poste ?')) return;
     try {
       await deleteEventPost(postId);
@@ -357,6 +359,7 @@ export default function EditEventPage() {
   }
 
   async function handleDeleteTask(taskId: string) {
+    if (!isAdmin) return;
     if (!confirm('Êtes-vous sûr de vouloir supprimer cette tâche ?')) return;
     try {
       await deleteEventTask(taskId);
@@ -468,6 +471,15 @@ export default function EditEventPage() {
       <div className="card space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-secondary">Postes et tâches</h2>
+          {!newPostFormOpen && !newTaskForm && (
+            <button
+              type="button"
+              onClick={handleAddPost}
+              className="btn-secondary text-sm"
+            >
+              + Ajouter un poste
+            </button>
+          )}
         </div>
 
         <div className="space-y-4">
@@ -523,15 +535,17 @@ export default function EditEventPage() {
                       <p className="text-xs text-gray-500">{post.tasks.length} tâche(s)</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handleDeletePost(post.id)}
-                      className="text-sm text-red-600 hover:text-red-700"
-                    >
-                      Supprimer
-                    </button>
-                  </div>
+                  {isAdmin && (
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePost(post.id)}
+                        className="text-sm text-red-600 hover:text-red-700"
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -595,13 +609,15 @@ export default function EditEventPage() {
                                   Responsable par défaut : {postDefaultName}
                                 </div>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteTask(task.id)}
-                                className="text-xs text-red-600 hover:text-red-700"
-                              >
-                                Supprimer
-                              </button>
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteTask(task.id)}
+                                  className="text-xs text-red-600 hover:text-red-700"
+                                >
+                                  Supprimer
+                                </button>
+                              )}
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -660,15 +676,17 @@ export default function EditEventPage() {
                                 disabled={isCompleted}
                               />
                             </div>
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteTask(task.id)}
-                          className="text-xs text-red-600 hover:text-red-700"
-                        >
-                          Supprimer la tâche
-                        </button>
-                      </div>
+                      {isAdmin && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTask(task.id)}
+                            className="text-xs text-red-600 hover:text-red-700"
+                          >
+                            Supprimer la tâche
+                          </button>
+                        </div>
+                      )}
                           </div>
                         );
                       })}
@@ -764,17 +782,7 @@ export default function EditEventPage() {
             );
           })}
 
-          {!newPostFormOpen && !newTaskForm && (
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={handleAddPost}
-                className="btn-secondary text-sm"
-              >
-                + Ajouter un poste
-              </button>
-            </div>
-          )}
+          
         </div>
  
         <datalist id="event-responsible-suggestions">

@@ -11,6 +11,7 @@ import {
   deleteEvent,
   deleteEventTask,
   createEventTask,
+  deleteEventPost,
 } from '@/lib/supabase/queries';
 import type { EventWithDetails } from '@/lib/types/database';
 import { formatDateFullFrench, formatDateISO, addDays } from '@/lib/utils/date';
@@ -22,13 +23,14 @@ import Link from 'next/link';
 export default function EventDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const { user, isAuthenticated, loading: authLoading } = useAuth();
+  const { user, profile, isAuthenticated, loading: authLoading } = useAuth();
   const [event, setEvent] = useState<EventWithDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [commentTexts, setCommentTexts] = useState<Record<string, string>>({});
   const [showCommentInputs, setShowCommentInputs] = useState<Record<string, boolean>>({});
   const [responsibleFilter, setResponsibleFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<'pending' | 'all'>('pending');
   const [newTaskForm, setNewTaskForm] = useState<{
     postId: string;
     name: string;
@@ -36,6 +38,7 @@ export default function EventDetailPage() {
     alertDelay: string;
     responsible: string;
   } | null>(null);
+  const isAdmin = profile?.role === 'admin';
 
   useEffect(() => {
     if (!authLoading) {
@@ -146,6 +149,7 @@ export default function EventDetailPage() {
   }
 
   async function handleDeleteTask(taskId: string) {
+    if (!isAdmin) return;
     if (!confirm('Supprimer définitivement cette tâche ?')) return;
     try {
       await deleteEventTask(taskId);
@@ -155,8 +159,19 @@ export default function EventDetailPage() {
     }
   }
 
+  async function handleDeletePost(postId: string) {
+    if (!isAdmin) return;
+    if (!confirm('Supprimer ce poste et toutes ses tâches ?')) return;
+    try {
+      await deleteEventPost(postId);
+      await loadEvent();
+    } catch (err: any) {
+      alert('Erreur: ' + err.message);
+    }
+  }
+
   async function handleDeleteEvent() {
-    if (!event) return;
+    if (!isAdmin || !event) return;
     if (!confirm('Supprimer définitivement cet événement ?')) return;
     try {
       await deleteEvent(event.id);
@@ -248,32 +263,55 @@ export default function EventDetailPage() {
           >
             Modifier
           </Link>
-          <button
-            onClick={handleDeleteEvent}
-            className="btn-secondary text-sm text-red-600 hover:text-red-700 border-red-200"
-          >
-            Supprimer
-          </button>
+          {isAdmin && (
+            <button
+              onClick={handleDeleteEvent}
+              className="btn-secondary text-sm text-red-600 hover:text-red-700 border-red-200"
+            >
+              Supprimer
+            </button>
+          )}
         </div>
       </div>
 
-      {responsibleOptions.length > 0 && (
-        <div className="card flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-sm">
-          <span className="font-medium text-secondary">Filtrer les tâches par responsable</span>
-          <select
-            value={responsibleFilter}
-            onChange={(e) => setResponsibleFilter(e.target.value)}
-            className="input sm:max-w-xs"
-          >
-            <option value="all">Tous les responsables</option>
-            {responsibleOptions.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+      <div className="card space-y-3 text-sm">
+        <span className="font-medium text-secondary">Filtres d'affichage</span>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          {responsibleOptions.length > 0 && (
+            <label className="flex flex-col sm:flex-1 gap-1">
+              <span className="text-xs text-gray-500 uppercase tracking-wide">Responsable</span>
+              <select
+                value={responsibleFilter}
+                onChange={(e) => setResponsibleFilter(e.target.value)}
+                className="input"
+              >
+                <option value="all">Tous les responsables</option>
+                {responsibleOptions.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="flex flex-col sm:w-48 gap-1">
+            <span className="text-xs text-gray-500 uppercase tracking-wide">Statut</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as 'pending' | 'all')}
+              className="input"
+            >
+              <option value="pending">Tâches non validées</option>
+              <option value="all">Toutes les tâches</option>
+            </select>
+          </label>
         </div>
-      )}
+        {statusFilter === 'pending' && (
+          <p className="text-xs text-gray-500">
+            Les tâches validées sont masquées par défaut. Passez le filtre sur "Toutes les tâches" pour les afficher.
+          </p>
+        )}
+      </div>
 
       {event.description && (
         <div className="card">
@@ -288,15 +326,31 @@ export default function EventDetailPage() {
             const explicit = task.responsible_name?.trim();
             const assignee = task.assignee ? formatUserName(task.assignee) : '';
             const nameForFilter = explicit || assignee || postDefaultName;
-            return responsibleFilter === 'all' || nameForFilter === responsibleFilter;
+            const matchesResponsible = responsibleFilter === 'all' || nameForFilter === responsibleFilter;
+            const matchesStatus = statusFilter === 'all' || !task.completed_at;
+            return matchesResponsible && matchesStatus;
           });
 
           return (
           <div key={post.id} className="card">
-            <h2 className="text-lg font-semibold mb-4 text-secondary">{post.name}</h2>
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+              <h2 className="text-lg font-semibold text-secondary">{post.name}</h2>
+              {isAdmin && (
+                <button
+                  onClick={() => handleDeletePost(post.id)}
+                  className="btn-secondary text-xs sm:text-sm text-red-600 border-red-200 hover:text-red-700 self-start"
+                >
+                  Supprimer le poste
+                </button>
+              )}
+            </div>
             
             {filteredTasks.length === 0 ? (
-              <p className="text-gray-500 text-sm">Aucune tâche pour ce poste</p>
+              <p className="text-gray-500 text-sm">
+                {post.tasks.length === 0
+                  ? 'Aucune tâche pour ce poste'
+                  : 'Aucune tâche ne correspond aux filtres actuels'}
+              </p>
             ) : (
               <div className="space-y-3">
                 {filteredTasks.map((task) => {
@@ -441,12 +495,14 @@ export default function EventDetailPage() {
                               Rouvrir
                             </button>
                           )}
-                          <button
-                            onClick={() => handleDeleteTask(task.id)}
-                            className="btn-secondary text-sm py-2 px-4 flex-1 sm:flex-none text-red-600 border-red-200 hover:text-red-700"
-                          >
-                            Supprimer la tâche
-                          </button>
+                          {isAdmin && (
+                            <button
+                              onClick={() => handleDeleteTask(task.id)}
+                              className="btn-secondary text-sm py-2 px-4 flex-1 sm:flex-none text-red-600 border-red-200 hover:text-red-700"
+                            >
+                              Supprimer la tâche
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>

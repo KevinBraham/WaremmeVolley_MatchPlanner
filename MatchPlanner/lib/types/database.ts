@@ -20,6 +20,7 @@ export interface UserProfile {
   display_name: string | null;
   first_name: string | null;
   last_name: string | null;
+  role: 'agent' | 'admin';
   created_at: string;
 }
 
@@ -70,6 +71,7 @@ export interface EventPost {
   default_user_id: string | null;
   default_responsible_name: string | null;
   position: number;
+  template_post_id?: string | null;
 }
 
 export interface EventTask {
@@ -78,13 +80,14 @@ export interface EventTask {
   name: string;
   assignee_user_id: string | null;
   due_date: string | null; // date format YYYY-MM-DD
-  alert_date: string | null; // date format YYYY-MM-DD
+  alert_date: string | null;
   status: TaskStatus;
   completed_at: string | null;
   completed_by: string | null;
   position: number;
   created_at: string;
   responsible_name: string | null;
+  template_task_id?: string | null;
 }
 
 export interface TaskComment {

@@ -58,6 +58,7 @@ export default function SetPasswordPage() {
                 display_name: derived.display_name,
                 first_name: derived.first_name,
                 last_name: derived.last_name,
+                role: 'agent',
               });
             }
           } catch (err) {

@@ -3,7 +3,19 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/hooks/useAuth';
-import { getEventTemplateWithDetails, updateEventTemplate, createTemplatePost, createTemplateTask, updateTemplatePost, updateTemplateTask, deleteTemplatePost, deleteTemplateTask } from '@/lib/supabase/queries';
+import {
+  getEventTemplateWithDetails,
+  updateEventTemplate,
+  createTemplatePost,
+  createTemplateTask,
+  updateTemplatePost,
+  updateTemplateTask,
+  deleteTemplatePost,
+  deleteTemplateTask,
+  syncFutureEventsWithTemplate,
+  removeTemplatePostFromFutureEvents,
+  removeTemplateTaskFromFutureEvents,
+} from '@/lib/supabase/queries';
 import type { EventTemplateWithDetails, EventTemplateUpdate, TemplatePost, TemplateTask } from '@/lib/types/database';
 import { formatUserName } from '@/lib/utils/user';
 import Link from 'next/link';
@@ -11,7 +23,7 @@ import Link from 'next/link';
 export default function EditTemplatePage() {
   const params = useParams();
   const router = useRouter();
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { profile, isAuthenticated, loading: authLoading } = useAuth();
   const [template, setTemplate] = useState<EventTemplateWithDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -25,6 +37,7 @@ export default function EditTemplatePage() {
     criticalDelay: string;
     responsible: string;
   } | null>(null);
+  const isAdmin = profile?.role === 'admin';
   
   const [formData, setFormData] = useState({
     name: '',
@@ -93,6 +106,7 @@ export default function EditTemplatePage() {
     e.preventDefault();
     if (!template) return;
 
+    const templateId = template.id;
     const name = newPostFormData.name.trim();
     if (!name) {
       alert('Le nom du poste est requis');
@@ -111,6 +125,7 @@ export default function EditTemplatePage() {
       setNewPostFormOpen(false);
       setNewPostFormData({ name: '', responsible: '' });
       await loadTemplate();
+      await syncFutureEventsWithTemplate(templateId);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -122,10 +137,17 @@ export default function EditTemplatePage() {
   }
 
   async function handleDeletePost(postId: string) {
+    if (!isAdmin) return;
     if (!confirm('Êtes-vous sûr de vouloir supprimer ce poste ?')) return;
     try {
+      if (!template) return;
+      const templateId = template.id;
+      const postToDelete = template.posts.find((p) => p.id === postId);
+      if (!postToDelete) return;
+      await removeTemplatePostFromFutureEvents(templateId, postToDelete);
       await deleteTemplatePost(postId);
       await loadTemplate();
+      await syncFutureEventsWithTemplate(templateId);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -140,6 +162,7 @@ export default function EditTemplatePage() {
     e.preventDefault();
     if (!template || !newTaskForm) return;
 
+    const templateId = template.id;
     const name = newTaskForm.name.trim();
     if (!name) {
       alert('Le nom de la tâche est requis');
@@ -180,6 +203,7 @@ export default function EditTemplatePage() {
       });
       setNewTaskForm(null);
       await loadTemplate();
+      await syncFutureEventsWithTemplate(templateId);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -303,10 +327,18 @@ export default function EditTemplatePage() {
   }
 
   async function handleDeleteTask(taskId: string) {
+    if (!isAdmin) return;
     if (!confirm('Êtes-vous sûr de vouloir supprimer cette tâche ?')) return;
     try {
+      if (!template) return;
+      const templateId = template.id;
+      const parentPost = template.posts.find((post) => post.tasks.some((task) => task.id === taskId));
+      const templateTask = parentPost?.tasks.find((task) => task.id === taskId);
+      if (!parentPost || !templateTask) return;
+      await removeTemplateTaskFromFutureEvents(templateId, parentPost, templateTask);
       await deleteTemplateTask(taskId);
       await loadTemplate();
+      await syncFutureEventsWithTemplate(templateId);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -400,6 +432,15 @@ export default function EditTemplatePage() {
       <div className="card space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-secondary">Postes et tâches</h2>
+          {!newPostFormOpen && !newTaskForm && (
+            <button
+              type="button"
+              onClick={handleAddPost}
+              className="btn-secondary text-sm"
+            >
+              + Ajouter un poste
+            </button>
+          )}
         </div>
         <div className="space-y-4">
           {newPostFormOpen && (
@@ -453,15 +494,17 @@ export default function EditTemplatePage() {
                       <p className="text-xs text-gray-500">{post.tasks.length} tâche(s)</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handleDeletePost(post.id)}
-                      className="text-sm text-red-600 hover:text-red-700"
-                    >
-                      Supprimer
-                    </button>
-                  </div>
+                  {isAdmin && (
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePost(post.id)}
+                        className="text-sm text-red-600 hover:text-red-700"
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -512,13 +555,15 @@ export default function EditTemplatePage() {
                                 </div>
                               )}
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteTask(task.id)}
-                              className="text-xs text-red-600 hover:text-red-700"
-                            >
-                              Supprimer
-                            </button>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteTask(task.id)}
+                                className="text-xs text-red-600 hover:text-red-700"
+                              >
+                                Supprimer
+                              </button>
+                            )}
                           </div>
 
                           <div>
@@ -671,17 +716,7 @@ export default function EditTemplatePage() {
             );
           })}
 
-          {!newPostFormOpen && !newTaskForm && (
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={handleAddPost}
-                className="btn-secondary text-sm"
-              >
-                + Ajouter un poste
-              </button>
-            </div>
-          )}
+          
         </div>
       </div>
       <datalist id="template-responsible-suggestions">

@@ -8,7 +8,8 @@ import type { Team, TeamInsert } from '@/lib/types/database';
 import Link from 'next/link';
 
 export default function TeamsPage() {
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { profile, isAuthenticated, loading: authLoading } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const router = useRouter();
   const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,6 +62,7 @@ export default function TeamsPage() {
   }
 
   async function handleDelete(id: string) {
+    if (!isAdmin) return;
     if (!confirm('Êtes-vous sûr de vouloir supprimer cette équipe ?')) {
       return;
     }
@@ -164,13 +166,15 @@ export default function TeamsPage() {
                 >
                   Modifier
                 </button>
-                <button
-                  onClick={() => handleDelete(team.id)}
-                  disabled={deleting === team.id}
-                  className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50"
-                >
-                  {deleting === team.id ? 'Suppression...' : 'Supprimer'}
-                </button>
+                {isAdmin && (
+                  <button
+                    onClick={() => handleDelete(team.id)}
+                    disabled={deleting === team.id}
+                    className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50"
+                  >
+                    {deleting === team.id ? 'Suppression...' : 'Supprimer'}
+                  </button>
+                )}
               </div>
             </div>
           ))}

@@ -10,7 +10,8 @@ import { formatUserName } from '@/lib/utils/user';
 
 export default function UsersPage() {
   const router = useRouter();
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { profile, isAuthenticated, loading: authLoading } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -18,6 +19,7 @@ export default function UsersPage() {
   const [newUserDisplayName, setNewUserDisplayName] = useState('');
   const [newUserFirstName, setNewUserFirstName] = useState('');
   const [newUserLastName, setNewUserLastName] = useState('');
+const [newUserRole, setNewUserRole] = useState<'agent' | 'admin'>('agent');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -26,6 +28,7 @@ export default function UsersPage() {
     display_name: '',
     first_name: '',
     last_name: '',
+  role: 'agent' as 'agent' | 'admin',
   });
   const [updating, setUpdating] = useState(false);
 
@@ -35,11 +38,19 @@ export default function UsersPage() {
         router.push('/login');
         return;
       }
+      if (!isAdmin) {
+        router.push('/');
+        return;
+      }
       loadUsers();
     }
-  }, [isAuthenticated, authLoading]);
+  }, [isAuthenticated, authLoading, isAdmin]);
 
   async function loadUsers() {
+    if (!isAdmin) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       const usersData = await getAllUserProfiles();
@@ -54,6 +65,7 @@ export default function UsersPage() {
 
   async function handleCreateUser(e: React.FormEvent) {
     e.preventDefault();
+    if (!isAdmin) return;
     setError(null);
     setCreating(true);
 
@@ -101,6 +113,7 @@ export default function UsersPage() {
         display_name: displayName,
         first_name: firstName,
         last_name: lastName,
+        role: newUserRole,
       });
 
       // Envoyer un email de réinitialisation pour que l'utilisateur puisse définir son mot de passe
@@ -114,6 +127,7 @@ export default function UsersPage() {
       setNewUserFirstName('');
       setNewUserLastName('');
       setShowCreateForm(false);
+      setNewUserRole('agent');
       await loadUsers();
       
       alert(`Un email a été envoyé à ${newUserEmail} pour définir le mot de passe`);
@@ -125,6 +139,7 @@ export default function UsersPage() {
   }
 
   async function handleDeleteUser(userId: string) {
+    if (!isAdmin) return;
     if (!confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ?')) {
       return;
     }
@@ -152,6 +167,7 @@ export default function UsersPage() {
       display_name: user.display_name || '',
       first_name: user.first_name || '',
       last_name: user.last_name || '',
+    role: user.role || 'agent',
     });
     setShowCreateForm(false);
     setError(null);
@@ -160,6 +176,7 @@ export default function UsersPage() {
   async function handleUpdateUser(e: FormEvent) {
     e.preventDefault();
     if (!editingUser) return;
+    if (!isAdmin) return;
 
     setUpdating(true);
     setError(null);
@@ -169,6 +186,7 @@ export default function UsersPage() {
         display_name: editValues.display_name.trim() || null,
         first_name: editValues.first_name.trim() || null,
         last_name: editValues.last_name.trim() || null,
+        role: editValues.role,
       });
       await loadUsers();
       setEditingUser(null);
@@ -180,6 +198,7 @@ export default function UsersPage() {
   }
 
   async function handleResetPassword(email: string) {
+    if (!isAdmin) return;
     try {
       // Envoyer un email de réinitialisation de mot de passe
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
@@ -284,6 +303,21 @@ export default function UsersPage() {
                 Si non renseigné, le nom sera dérivé de l'email
               </p>
             </div>
+            <div>
+              <label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-2">
+                Rôle *
+              </label>
+              <select
+                id="role"
+                value={newUserRole}
+                onChange={(e) => setNewUserRole(e.target.value as 'agent' | 'admin')}
+                className="input"
+                required
+              >
+                <option value="agent">Agent</option>
+                <option value="admin">Administrateur</option>
+              </select>
+            </div>
             <div className="flex gap-3">
               <button
                 type="submit"
@@ -300,6 +334,7 @@ export default function UsersPage() {
                   setNewUserDisplayName('');
                   setNewUserFirstName('');
                   setNewUserLastName('');
+                  setNewUserRole('agent');
                   setError(null);
                 }}
                 className="btn-secondary"
@@ -324,6 +359,7 @@ export default function UsersPage() {
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Prénom</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Nom</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Nom d'affichage</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Rôle</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">ID utilisateur</th>
                   <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">Actions</th>
                 </tr>
@@ -342,6 +378,9 @@ export default function UsersPage() {
                     </td>
                     <td className="py-3 px-4 text-sm text-gray-700">
                       {user.display_name || '—'}
+                    </td>
+                    <td className="py-3 px-4 text-sm text-gray-700">
+                      {user.role === 'admin' ? 'Administrateur' : 'Agent'}
                     </td>
                     <td className="py-3 px-4 text-sm text-gray-700 font-mono text-xs">
                       {user.user_id.substring(0, 8)}...
@@ -431,6 +470,23 @@ export default function UsersPage() {
                 className="input"
               />
             </div>
+            <div>
+              <label htmlFor="editRole" className="block text-sm font-medium text-gray-700 mb-2">
+                Rôle *
+              </label>
+              <select
+                id="editRole"
+                value={editValues.role}
+                onChange={(e) =>
+                  setEditValues((prev) => ({ ...prev, role: e.target.value as 'agent' | 'admin' }))
+                }
+                className="input"
+                required
+              >
+                <option value="agent">Agent</option>
+                <option value="admin">Administrateur</option>
+              </select>
+            </div>
             <div className="flex gap-3">
               <button
                 type="submit"
@@ -443,7 +499,7 @@ export default function UsersPage() {
                 type="button"
                 onClick={() => {
                   setEditingUser(null);
-                  setEditValues({ display_name: '', first_name: '', last_name: '' });
+                  setEditValues({ display_name: '', first_name: '', last_name: '', role: 'agent' });
                 }}
                 className="btn-secondary"
               >
