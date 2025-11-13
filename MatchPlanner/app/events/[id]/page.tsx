@@ -38,6 +38,8 @@ export default function EventDetailPage() {
     alertDelay: string;
     responsible: string;
   } | null>(null);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [bulkCompleting, setBulkCompleting] = useState(false);
   const isAdmin = profile?.role === 'admin';
 
   useEffect(() => {
@@ -59,6 +61,8 @@ export default function EventDetailPage() {
         return;
       }
       setEvent(eventData);
+      const availableTaskIds = eventData.posts.flatMap((post) => post.tasks.map((task) => task.id));
+      setSelectedTaskIds((prev) => prev.filter((id) => availableTaskIds.includes(id)));
     } catch (err: any) {
       setError(err.message || 'Erreur lors du chargement de l\'événement');
     } finally {
@@ -69,10 +73,27 @@ export default function EventDetailPage() {
   async function handleCompleteTask(taskId: string) {
     if (!user) return;
     try {
+      setSelectedTaskIds((prev) => prev.filter((id) => id !== taskId));
       await completeTask(taskId, user.id);
       await loadEvent();
     } catch (err: any) {
       alert('Erreur: ' + err.message);
+    }
+  }
+
+  async function handleCompleteSelectedTasks() {
+    if (!user || selectedTaskIds.length === 0) return;
+    const tasksToComplete = selectedTaskIds;
+    try {
+      setBulkCompleting(true);
+      setSelectedTaskIds([]);
+      await Promise.all(tasksToComplete.map((taskId) => completeTask(taskId, user.id)));
+      await loadEvent();
+    } catch (err: any) {
+      alert('Erreur: ' + err.message);
+      setSelectedTaskIds(tasksToComplete);
+    } finally {
+      setBulkCompleting(false);
     }
   }
 
@@ -320,6 +341,16 @@ export default function EventDetailPage() {
       )}
 
       <div className="space-y-4">
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={handleCompleteSelectedTasks}
+            className="btn-primary flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            disabled={selectedTaskIds.length === 0 || bulkCompleting}
+          >
+            {bulkCompleting ? 'Validation...' : `Valider la sélection (${selectedTaskIds.length})`}
+          </button>
+        </div>
         {event.posts.map((post) => {
           const postDefaultName = post.default_responsible_name?.trim() || formatUserName(post.default_user, 'Non assigné');
           const filteredTasks = post.tasks.filter((task) => {
@@ -377,6 +408,20 @@ export default function EventDetailPage() {
                       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-2 flex-wrap">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent"
+                              checked={selectedTaskIds.includes(task.id)}
+                              disabled={isCompleted || bulkCompleting}
+                              onChange={() =>
+                                setSelectedTaskIds((prev) =>
+                                  prev.includes(task.id)
+                                    ? prev.filter((id) => id !== task.id)
+                                    : [...prev, task.id]
+                                )
+                              }
+                              aria-label={`Sélectionner la tâche ${task.name}`}
+                            />
                             {!isCompleted && (
                               <>
                                 <StatusBadge color={taskColor} size="lg" />
