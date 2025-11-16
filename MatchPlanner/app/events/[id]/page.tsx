@@ -30,7 +30,7 @@ export default function EventDetailPage() {
   const [commentTexts, setCommentTexts] = useState<Record<string, string>>({});
   const [showCommentInputs, setShowCommentInputs] = useState<Record<string, boolean>>({});
   const [responsibleFilter, setResponsibleFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<'pending' | 'all'>('pending');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed' | 'red' | 'orange' | 'green'>('pending');
   const [newTaskForm, setNewTaskForm] = useState<{
     postId: string;
     name: string;
@@ -319,17 +319,31 @@ export default function EventDetailPage() {
             <span className="text-xs text-gray-500 uppercase tracking-wide">Statut</span>
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as 'pending' | 'all')}
+              onChange={(e) => setStatusFilter(e.target.value as 'all' | 'pending' | 'completed' | 'red' | 'orange' | 'green')}
               className="input"
             >
-              <option value="pending">Tâches non validées</option>
               <option value="all">Toutes les tâches</option>
+              <option value="pending">Tâches non validées</option>
+              <option value="red">Tâches urgentes</option>
+              <option value="orange">Tâches en attention</option>
+              <option value="green">Tâches à jour</option>
+              <option value="completed">Tâches validées uniquement</option>
             </select>
           </label>
         </div>
         {statusFilter === 'pending' && (
           <p className="text-xs text-gray-500">
             Les tâches validées sont masquées par défaut. Passez le filtre sur "Toutes les tâches" pour les afficher.
+          </p>
+        )}
+        {statusFilter === 'completed' && (
+          <p className="text-xs text-gray-500">
+            Seules les tâches validées sont affichées.
+          </p>
+        )}
+        {(statusFilter === 'red' || statusFilter === 'orange' || statusFilter === 'green') && (
+          <p className="text-xs text-gray-500">
+            Affichage uniquement des tâches non validées avec le statut sélectionné.
           </p>
         )}
       </div>
@@ -358,7 +372,20 @@ export default function EventDetailPage() {
             const assignee = task.assignee ? formatUserName(task.assignee) : '';
             const nameForFilter = explicit || assignee || postDefaultName;
             const matchesResponsible = responsibleFilter === 'all' || nameForFilter === responsibleFilter;
-            const matchesStatus = statusFilter === 'all' || !task.completed_at;
+            
+            // Logique de filtrage par statut
+            let matchesStatus = false;
+            if (statusFilter === 'all') {
+              matchesStatus = true;
+            } else if (statusFilter === 'pending') {
+              matchesStatus = !task.completed_at;
+            } else if (statusFilter === 'completed') {
+              matchesStatus = !!task.completed_at;
+            } else if (statusFilter === 'red' || statusFilter === 'orange' || statusFilter === 'green') {
+              // Pour les filtres par couleur, on filtre uniquement les tâches non terminées avec la couleur correspondante
+              matchesStatus = !task.completed_at && getTaskStatusColor(task) === statusFilter;
+            }
+            
             return matchesResponsible && matchesStatus;
           });
 
