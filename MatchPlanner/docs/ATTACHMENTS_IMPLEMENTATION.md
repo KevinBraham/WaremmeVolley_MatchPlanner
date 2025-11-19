@@ -124,3 +124,4 @@ Variables d'environnement nécessaires :
 - Les métadonnées sont stockées dans Supabase pour des requêtes rapides
 - Le refresh token doit être gardé secret et ne jamais être commité dans Git
 
+

@@ -431,6 +431,12 @@ export default function EventDetailPage() {
 
   function canDeleteComment(comment: any, allComments: any[]): boolean {
     if (!user || !comment.author_user_id) return false;
+    
+    // Ne pas autoriser la suppression des commentaires automatiques d'historique de modification
+    if (comment.content && comment.content.startsWith('Modification:')) {
+      return false;
+    }
+    
     // Vérifier si l'utilisateur est l'auteur du commentaire
     if (comment.author_user_id !== user.id) return false;
     
@@ -445,6 +451,27 @@ export default function EventDetailPage() {
   }
 
   async function handleDeleteComment(commentId: string) {
+    if (!event) return;
+    
+    // Trouver le commentaire dans l'événement pour vérifier s'il est automatique
+    let comment: any = null;
+    for (const post of event.posts) {
+      for (const task of post.tasks) {
+        const foundComment = task.comments?.find((c: any) => c.id === commentId);
+        if (foundComment) {
+          comment = foundComment;
+          break;
+        }
+      }
+      if (comment) break;
+    }
+    
+    // Ne pas autoriser la suppression des commentaires automatiques d'historique de modification
+    if (comment && comment.content && comment.content.startsWith('Modification:')) {
+      alert('Les commentaires automatiques d\'historique de modification ne peuvent pas être supprimés.');
+      return;
+    }
+    
     if (!confirm('Êtes-vous sûr de vouloir supprimer ce commentaire ?')) return;
     
     try {
