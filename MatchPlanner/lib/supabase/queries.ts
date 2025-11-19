@@ -25,12 +25,15 @@ import type {
   EventTaskUpdate,
   TaskComment,
   TaskCommentInsert,
+  Attachment,
+  AttachmentInsert,
+  AttachmentUpdate,
   UserProfile,
   UserProfileInsert,
   UserProfileUpdate,
   TaskStatus,
 } from '@/lib/types/database';
-import { addDays } from '@/lib/utils/date';
+import { addDays, formatDateISO } from '@/lib/utils/date';
 
 let templateLinkingSupported: boolean | null = null;
 
@@ -558,10 +561,18 @@ export async function getEventWithDetails(id: string): Promise<EventWithDetails 
           
           if (commentsError) throw commentsError;
 
-          // Charger les auteurs des commentaires
+          // Charger les auteurs des commentaires et leurs attachments
           const commentsWithAuthors = await Promise.all(
             (comments || []).map(async (comment: any) => {
               const author = await getUserProfile(comment.author_user_id);
+              
+              // Charger les attachments du commentaire
+              const { data: commentAttachments } = await supabase
+                .from('attachments')
+                .select('*')
+                .eq('comment_id', comment.id)
+                .order('created_at', { ascending: true });
+              
               return {
                 ...comment,
                 author: author || {
@@ -571,15 +582,24 @@ export async function getEventWithDetails(id: string): Promise<EventWithDetails 
                   last_name: null,
                   created_at: '',
                 },
+                attachments: commentAttachments || [],
               };
             })
           );
+
+          // Charger les attachments de la tâche
+          const { data: taskAttachments } = await supabase
+            .from('attachments')
+            .select('*')
+            .eq('task_id', task.id)
+            .order('created_at', { ascending: true });
 
           return {
             ...task,
             assignee,
             completed_by_user,
-            comments: commentsWithAuthors
+            comments: commentsWithAuthors,
+            attachments: taskAttachments || []
           };
         })
       );
@@ -669,6 +689,7 @@ export async function createEventFromTemplate(
         responsible_name: responsibleName,
         due_date: dueDate,
         alert_date: alertDate,
+        reference_date: null,
         completed_at: null,
         completed_by: null,
         status: 'todo',
@@ -688,6 +709,13 @@ export async function createEventFromTemplate(
 }
 
 export async function updateEvent(id: string, updates: EventUpdate): Promise<Event> {
+  // Récupérer l'événement actuel pour comparer la date
+  const { data: currentEvent } = await supabase
+    .from('events')
+    .select('event_date')
+    .eq('id', id)
+    .single();
+
   const { data, error } = await supabase
     .from('events')
     .update(updates)
@@ -696,6 +724,69 @@ export async function updateEvent(id: string, updates: EventUpdate): Promise<Eve
     .single();
   
   if (error) throw error;
+
+  // Si la date de l'événement a changé, recalculer les dates des tâches non manuelles
+  if (updates.event_date && currentEvent && currentEvent.event_date !== updates.event_date) {
+    const { data: tasks, error: tasksError } = await supabase
+      .from('event_tasks')
+      .select('id, due_date, alert_date, reference_date')
+      .eq('event_id', id);
+    
+    if (!tasksError && tasks) {
+      const MS_PER_DAY = 1000 * 60 * 60 * 24;
+      
+      for (const task of tasks) {
+        // Ne recalculer que si la tâche n'a pas de date de référence personnalisée (date manuelle)
+        if (!task.reference_date) {
+          const oldEventDate = new Date(currentEvent.event_date);
+          const newEventDate = new Date(updates.event_date);
+          
+          // Calculer les délais actuels basés sur l'ancienne date
+          const oldRefDate = oldEventDate;
+          oldRefDate.setHours(0, 0, 0, 0);
+          
+          let criticalDelay: number | null = null;
+          let alertDelay: number | null = null;
+          
+          if (task.due_date) {
+            const dueDate = new Date(task.due_date);
+            dueDate.setHours(0, 0, 0, 0);
+            const diffDays = Math.round((oldRefDate.getTime() - dueDate.getTime()) / MS_PER_DAY);
+            criticalDelay = diffDays >= 0 ? diffDays : 0;
+          }
+          
+          if (task.alert_date) {
+            const alertDate = new Date(task.alert_date);
+            alertDate.setHours(0, 0, 0, 0);
+            const diffDays = Math.round((oldRefDate.getTime() - alertDate.getTime()) / MS_PER_DAY);
+            alertDelay = diffDays >= 0 ? diffDays : 0;
+          }
+          
+          // Recalculer les nouvelles dates basées sur la nouvelle date d'événement
+          const taskUpdates: { due_date?: string; alert_date?: string } = {};
+          
+          if (criticalDelay !== null) {
+            newEventDate.setHours(0, 0, 0, 0);
+            const newDueDate = new Date(newEventDate);
+            newDueDate.setDate(newDueDate.getDate() - criticalDelay);
+            taskUpdates.due_date = formatDateISO(newDueDate);
+          }
+          
+          if (alertDelay !== null) {
+            newEventDate.setHours(0, 0, 0, 0);
+            const newAlertDate = new Date(newEventDate);
+            newAlertDate.setDate(newAlertDate.getDate() - alertDelay);
+            taskUpdates.alert_date = formatDateISO(newAlertDate);
+          }
+          
+          if (Object.keys(taskUpdates).length > 0) {
+            await updateEventTask(task.id, taskUpdates);
+          }
+        }
+      }
+    }
+  }
+
   return data;
 }
 
@@ -816,12 +907,29 @@ async function syncEventWithTemplate(template: EventTemplateWithDetails, event: 
         templatePost.id,
         created as EventPost & { template_post_id: string | null }
       );
-    } else if (matchedPost.position !== templatePost.position) {
-      const updated = await updateEventPost(matchedPost.id, { position: templatePost.position });
-      postByTemplateId.set(
-        templatePost.id,
-        updated as EventPost & { template_post_id: string | null }
-      );
+    } else {
+      // Mettre à jour les propriétés du poste si nécessaire
+      const postUpdates: Partial<EventPostUpdate> = {};
+      
+      if (matchedPost.position !== templatePost.position) {
+        postUpdates.position = templatePost.position;
+      }
+      
+      // Mettre à jour le responsable par défaut si le poste est lié au modèle
+      if (matchedPost.template_post_id === templatePost.id) {
+        const expectedResponsibleName = templatePost.default_responsible_name || null;
+        if (matchedPost.default_responsible_name !== expectedResponsibleName) {
+          postUpdates.default_responsible_name = expectedResponsibleName;
+        }
+      }
+      
+      if (Object.keys(postUpdates).length > 0) {
+        const updated = await updateEventPost(matchedPost.id, postUpdates);
+        postByTemplateId.set(
+          templatePost.id,
+          updated as EventPost & { template_post_id: string | null }
+        );
+      }
     }
   }
 
@@ -847,7 +955,7 @@ async function syncEventWithTemplate(template: EventTemplateWithDetails, event: 
 
   const { data: tasksData, error: tasksError } = await supabase
     .from('event_tasks')
-    .select('id, event_post_id, template_task_id, name, position, responsible_name, assignee_user_id, due_date, alert_date, completed_at, completed_by')
+    .select('id, event_post_id, template_task_id, name, position, responsible_name, assignee_user_id, due_date, alert_date, reference_date, completed_at, completed_by')
     .in('event_post_id', postIds);
 
   if (tasksError) throw tasksError;
@@ -912,6 +1020,7 @@ async function syncEventWithTemplate(template: EventTemplateWithDetails, event: 
             null,
           due_date: dueDate,
           alert_date: alertDate,
+          reference_date: null,
           completed_at: null,
           completed_by: null,
           status: 'todo',
@@ -928,6 +1037,57 @@ async function syncEventWithTemplate(template: EventTemplateWithDetails, event: 
 
       if (matchedTask.position !== templateTask.position) {
         await updateEventTask(matchedTask.id, { position: templateTask.position });
+      }
+
+      // Mettre à jour les dates si la tâche n'a pas de date de référence personnalisée (non manuelle)
+      // et si elle est liée au modèle
+      if (matchedTask.template_task_id === templateTask.id) {
+        const taskUpdates: Partial<EventTaskUpdate> = {};
+        let shouldUpdate = false;
+
+        // Recalculer les dates seulement si pas de date de référence personnalisée
+        if (!matchedTask.reference_date) {
+          const criticalOffset = templateTask.default_due_offset_days ?? 0;
+          const alertOffset =
+            templateTask.default_alert_offset_days ?? templateTask.default_due_offset_days ?? criticalOffset;
+          const newDueDate = addDays(event.event_date, -criticalOffset);
+          const newAlertDate = addDays(event.event_date, -alertOffset);
+
+          // Vérifier si les dates doivent être mises à jour
+          if (matchedTask.due_date !== newDueDate || matchedTask.alert_date !== newAlertDate) {
+            taskUpdates.due_date = newDueDate;
+            taskUpdates.alert_date = newAlertDate;
+            shouldUpdate = true;
+          }
+        }
+
+        // Mettre à jour le responsable seulement s'il n'est pas défini manuellement
+        // (c'est-à-dire s'il correspond au responsable par défaut du poste ou s'il n'est pas défini)
+        const expectedResponsibleName =
+          templateTask.default_responsible_name ?? templatePost.default_responsible_name ?? null;
+        
+        // On considère qu'un responsable est manuel s'il diffère de celui attendu du modèle
+        // On ne le met à jour que si la tâche n'a pas de responsable défini ou si elle correspond au modèle
+        if (expectedResponsibleName !== null) {
+          // Si la tâche n'a pas de responsable ou si elle correspond au responsable par défaut du poste
+          // (donc pas manuel), on met à jour
+          if (!matchedTask.responsible_name || matchedTask.responsible_name === eventPost.default_responsible_name) {
+            if (matchedTask.responsible_name !== expectedResponsibleName) {
+              taskUpdates.responsible_name = expectedResponsibleName;
+              shouldUpdate = true;
+            }
+          }
+        }
+
+        // Mettre à jour le nom si nécessaire
+        if (matchedTask.name !== templateTask.name) {
+          taskUpdates.name = templateTask.name;
+          shouldUpdate = true;
+        }
+
+        if (shouldUpdate) {
+          await updateEventTask(matchedTask.id, taskUpdates);
+        }
       }
     }
 
@@ -980,7 +1140,21 @@ export async function createEventTask(task: EventTaskInsert): Promise<EventTask>
   return data;
 }
 
-export async function updateEventTask(id: string, updates: EventTaskUpdate): Promise<EventTask> {
+export async function updateEventTask(id: string, updates: EventTaskUpdate, userId?: string, trackChanges: boolean = false): Promise<EventTask> {
+  // Si on doit tracker les changements, récupérer l'ancienne valeur
+  let oldTask: EventTask | null = null;
+  if (trackChanges && userId) {
+    const { data: oldData, error: fetchError } = await supabase
+      .from('event_tasks')
+      .select('*')
+      .eq('id', id)
+      .single();
+    
+    if (!fetchError && oldData) {
+      oldTask = oldData as EventTask;
+    }
+  }
+
   const { data, error } = await supabase
     .from('event_tasks')
     .update(updates)
@@ -989,7 +1163,74 @@ export async function updateEventTask(id: string, updates: EventTaskUpdate): Pro
     .single();
   
   if (error) throw error;
+
+  // Créer des commentaires automatiques pour les modifications
+  if (trackChanges && userId && oldTask && data) {
+    const changes: string[] = [];
+    
+    const fieldLabels: Record<string, string> = {
+      name: 'Nom',
+      responsible_name: 'Responsable',
+      due_date: 'Date d\'échéance',
+      alert_date: 'Date d\'alerte',
+      reference_date: 'Date de référence',
+      assignee_user_id: 'Assigné à',
+      status: 'Statut',
+    };
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (key === 'id' || key === 'created_at' || key === 'updated_at') continue;
+      
+      const oldValue = (oldTask as any)[key];
+      const newValue = value;
+      
+      if (oldValue !== newValue && (oldValue !== null || newValue !== null)) {
+        const label = fieldLabels[key] || key;
+        let oldDisplay = formatFieldValue(key, oldValue);
+        let newDisplay = formatFieldValue(key, newValue);
+        
+        changes.push(`${label}: "${oldDisplay}" → "${newDisplay}"`);
+      }
+    }
+
+    if (changes.length > 0) {
+      const changeText = `Modification:\n${changes.join('\n')}`;
+      await createTaskComment({
+        task_id: id,
+        author_user_id: userId,
+        content: changeText,
+      });
+    }
+  }
+
   return data;
+}
+
+function formatFieldValue(field: string, value: any): string {
+  if (value === null || value === undefined || value === '') return '(vide)';
+  
+  if (field.includes('date')) {
+    if (typeof value === 'string') {
+      try {
+        return new Date(value).toLocaleDateString('fr-FR');
+      } catch {
+        return value;
+      }
+    }
+  }
+  
+  if (field === 'status') {
+    const statusLabels: Record<string, string> = {
+      'todo': 'À faire',
+      'in_progress': 'En cours',
+      'pending': 'En attente',
+      'completed': 'Complétée',
+      'done': 'Terminée',
+    };
+    return statusLabels[value] || value;
+  }
+  
+  return String(value);
 }
 
 export async function deleteEventTask(id: string): Promise<void> {
@@ -1054,5 +1295,123 @@ export async function deleteTaskComment(id: string): Promise<void> {
     .eq('id', id);
   
   if (error) throw error;
+}
+
+// ============================================
+// ATTACHMENTS
+// ============================================
+
+export async function getAttachmentsByTask(taskId: string): Promise<Attachment[]> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('*')
+    .eq('task_id', taskId)
+    .order('created_at', { ascending: true });
+  
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getAttachmentsByComment(commentId: string): Promise<Attachment[]> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('*')
+    .eq('comment_id', commentId)
+    .order('created_at', { ascending: true });
+  
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getAttachment(id: string): Promise<Attachment | null> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('*')
+    .eq('id', id)
+    .single();
+  
+  if (error) {
+    if (error.code === 'PGRST116') return null; // Not found
+    throw error;
+  }
+  return data;
+}
+
+export async function createAttachment(attachment: AttachmentInsert): Promise<Attachment> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .insert(attachment)
+    .select()
+    .single();
+  
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteAttachment(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('attachments')
+    .delete()
+    .eq('id', id);
+  
+  if (error) throw error;
+}
+
+/**
+ * Récupère tous les attachments d'une tâche (y compris ceux des commentaires)
+ */
+export async function getAllAttachmentsForTask(taskId: string): Promise<Attachment[]> {
+  // Attachments directement liés à la tâche
+  const taskAttachments = await getAttachmentsByTask(taskId);
+  
+  // Attachments liés aux commentaires de la tâche
+  const { data: comments } = await supabase
+    .from('task_comments')
+    .select('id')
+    .eq('task_id', taskId);
+  
+  const commentIds = (comments || []).map(c => c.id);
+  const commentAttachments = commentIds.length > 0
+    ? await Promise.all(commentIds.map(id => getAttachmentsByComment(id)))
+    : [];
+  
+  return [
+    ...taskAttachments,
+    ...commentAttachments.flat()
+  ];
+}
+
+/**
+ * Compte le nombre d'attachments pour une tâche
+ */
+export async function countAttachmentsForTask(taskId: string): Promise<number> {
+  const attachments = await getAllAttachmentsForTask(taskId);
+  return attachments.length;
+}
+
+/**
+ * Compte le nombre d'attachments pour un événement (toutes tâches confondues)
+ */
+export async function countAttachmentsForEvent(eventId: string): Promise<number> {
+  // Récupérer toutes les tâches de l'événement
+  const { data: posts } = await supabase
+    .from('event_posts')
+    .select('id')
+    .eq('event_id', eventId);
+  
+  if (!posts || posts.length === 0) return 0;
+  
+  const postIds = posts.map(p => p.id);
+  const { data: tasks } = await supabase
+    .from('event_tasks')
+    .select('id')
+    .in('event_post_id', postIds);
+  
+  if (!tasks || tasks.length === 0) return 0;
+  
+  // Compter les attachments de toutes les tâches
+  const taskIds = tasks.map(t => t.id);
+  const counts = await Promise.all(taskIds.map(id => countAttachmentsForTask(id)));
+  return counts.reduce((sum, count) => sum + count, 0);
 }
 

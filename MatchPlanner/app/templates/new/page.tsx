@@ -356,19 +356,6 @@ export default function NewTemplatePage() {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <div>
                         <label className="block text-xs text-gray-600 mb-1">
-                          Délai critique (jours avant événement) <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          type="number"
-                          value={task.default_due_offset_days}
-                          onChange={(e) => updateTask(postIndex, taskIndex, 'default_due_offset_days', parseInt(e.target.value, 10) || 0)}
-                          className="input text-sm"
-                          min="0"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-gray-600 mb-1">
                           Délai d'alerte (jours avant) <span className="text-red-500">*</span>
                         </label>
                         <input
@@ -390,6 +377,19 @@ export default function NewTemplatePage() {
                         <p className="text-[10px] text-gray-500 mt-1">
                           Doit être supérieur ou égal au délai critique.
                         </p>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">
+                          Délai critique (jours avant événement) <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="number"
+                          value={task.default_due_offset_days}
+                          onChange={(e) => updateTask(postIndex, taskIndex, 'default_due_offset_days', parseInt(e.target.value, 10) || 0)}
+                          className="input text-sm"
+                          min="0"
+                          required
+                        />
                       </div>
                       <div>
                         <label className="block text-xs text-gray-600 mb-1">

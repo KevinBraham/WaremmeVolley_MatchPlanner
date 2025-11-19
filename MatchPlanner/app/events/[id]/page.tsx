@@ -8,16 +8,25 @@ import {
   completeTask,
   reopenTask,
   createTaskComment,
+  deleteTaskComment,
   deleteEvent,
   deleteEventTask,
   createEventTask,
+  createEventPost,
   deleteEventPost,
+  updateEventTask,
+  updateEvent,
+  countAttachmentsForTask,
+  countAttachmentsForEvent,
+  getAllAttachmentsForTask,
 } from '@/lib/supabase/queries';
 import type { EventWithDetails } from '@/lib/types/database';
 import { formatDateFullFrench, formatDateISO, addDays } from '@/lib/utils/date';
 import { getTaskStatusColor, getStatusTextColorClasses } from '@/lib/utils/status-color';
 import { formatUserName } from '@/lib/utils/user';
 import { StatusBadge } from '@/components/StatusBadge';
+import AttachmentManager from '@/components/AttachmentManager';
+import { supabase } from '@/lib/supabaseClient';
 import Link from 'next/link';
 
 export default function EventDetailPage() {
@@ -37,9 +46,13 @@ export default function EventDetailPage() {
     criticalDelay: string;
     alertDelay: string;
     responsible: string;
+    referenceDate: string;
   } | null>(null);
+  const [newPostFormOpen, setNewPostFormOpen] = useState(false);
+  const [newPostFormData, setNewPostFormData] = useState({ name: '', responsible: '' });
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const [bulkCompleting, setBulkCompleting] = useState(false);
+  // Suppression du mode édition - les tâches sont directement éditables
   const isAdmin = profile?.role === 'admin';
 
   useEffect(() => {
@@ -70,17 +83,6 @@ export default function EventDetailPage() {
     }
   }
 
-  async function handleCompleteTask(taskId: string) {
-    if (!user) return;
-    try {
-      setSelectedTaskIds((prev) => prev.filter((id) => id !== taskId));
-      await completeTask(taskId, user.id);
-      await loadEvent();
-    } catch (err: any) {
-      alert('Erreur: ' + err.message);
-    }
-  }
-
   async function handleCompleteSelectedTasks() {
     if (!user || selectedTaskIds.length === 0) return;
     const tasksToComplete = selectedTaskIds;
@@ -97,6 +99,16 @@ export default function EventDetailPage() {
     }
   }
 
+  async function handleCompleteTask(taskId: string) {
+    if (!user) return;
+    try {
+      await completeTask(taskId, user.id);
+      await loadEvent();
+    } catch (err: any) {
+      alert('Erreur: ' + err.message);
+    }
+  }
+
   async function handleReopenTask(taskId: string) {
     try {
       await reopenTask(taskId);
@@ -106,8 +118,47 @@ export default function EventDetailPage() {
     }
   }
 
+  function handleAddPost() {
+    setNewTaskForm(null);
+    setNewPostFormOpen(true);
+    setNewPostFormData({ name: '', responsible: '' });
+  }
+
+  async function handleCreatePostSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!event) return;
+
+    const name = newPostFormData.name.trim();
+    if (!name) {
+      alert('Le nom du poste est requis');
+      return;
+    }
+
+    try {
+      const maxPosition = Math.max(...event.posts.map((p) => p.position), -1);
+      await createEventPost({
+        event_id: event.id,
+        name,
+        default_user_id: null,
+        default_responsible_name: newPostFormData.responsible.trim() || null,
+        position: maxPosition + 1,
+      });
+      setNewPostFormOpen(false);
+      setNewPostFormData({ name: '', responsible: '' });
+      await loadEvent();
+    } catch (err: any) {
+      alert('Erreur: ' + err.message);
+    }
+  }
+
+  function handleCancelNewPost() {
+    setNewPostFormOpen(false);
+    setNewPostFormData({ name: '', responsible: '' });
+  }
+
   function handleAddTask(postId: string) {
-    setNewTaskForm({ postId, name: '', criticalDelay: '', alertDelay: '', responsible: '' });
+    setNewPostFormOpen(false);
+    setNewTaskForm({ postId, name: '', criticalDelay: '', alertDelay: '', responsible: '', referenceDate: event?.event_date || '' });
   }
 
   function handleCancelNewTask() {
@@ -145,8 +196,9 @@ export default function EventDetailPage() {
       return;
     }
 
-    const dueDate = addDays(event.event_date, -criticalDelay);
-    const alertDate = addDays(event.event_date, -alertDelay);
+    const refDate = newTaskForm.referenceDate.trim() || event.event_date;
+    const dueDate = addDays(refDate, -criticalDelay);
+    const alertDate = addDays(refDate, -alertDelay);
 
     try {
       const maxPosition = Math.max(...post.tasks.map((t) => t.position), -1);
@@ -157,6 +209,7 @@ export default function EventDetailPage() {
         responsible_name: newTaskForm.responsible.trim() || post.default_responsible_name || null,
         due_date: dueDate,
         alert_date: alertDate,
+        reference_date: newTaskForm.referenceDate.trim() || null,
         completed_at: null,
         completed_by: null,
         status: 'todo',
@@ -169,10 +222,98 @@ export default function EventDetailPage() {
     }
   }
 
+  async function handleEventFieldUpdate(field: 'name' | 'event_date', value: string) {
+    if (!event) return;
+
+    try {
+      const updates: any = {};
+      
+      if (field === 'name') {
+        const trimmed = value.trim();
+        if (trimmed === event.name) return;
+        updates.name = trimmed;
+      } else if (field === 'event_date') {
+        if (value === event.event_date) return;
+        updates.event_date = value;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await updateEvent(event.id, updates);
+        await loadEvent();
+      }
+    } catch (err: any) {
+      alert('Erreur: ' + err.message);
+    }
+  }
+
+  async function handleTaskFieldUpdate(taskId: string, field: string, value: any) {
+    if (!user || !event) return;
+
+    try {
+      const currentTask = event.posts
+        .flatMap(p => p.tasks)
+        .find(t => t.id === taskId);
+      
+      if (!currentTask) return;
+
+      const updates: any = {};
+      
+      if (field === 'name' && value.trim() !== currentTask.name) {
+        updates.name = value.trim();
+      } else if (field === 'responsible_name' && value.trim() !== (currentTask.responsible_name || '')) {
+        updates.responsible_name = value.trim() || null;
+      } else if (field === 'due_date' && value !== (currentTask.due_date || '')) {
+        updates.due_date = value || null;
+      } else if (field === 'alert_date' && value !== (currentTask.alert_date || '')) {
+        updates.alert_date = value || null;
+      } else if (field === 'reference_date' && value !== (currentTask.reference_date || event.event_date)) {
+        updates.reference_date = value || null;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await updateEventTask(taskId, updates, user.id, true);
+        await loadEvent();
+      }
+    } catch (err: any) {
+      alert('Erreur: ' + err.message);
+    }
+  }
+
   async function handleDeleteTask(taskId: string) {
     if (!isAdmin) return;
-    if (!confirm('Supprimer définitivement cette tâche ?')) return;
+    
+    // Compter les fichiers associés
+    const fileCount = await countAttachmentsForTask(taskId);
+    const fileMessage = fileCount > 0 
+      ? `\n\n⚠️ Attention : ${fileCount} fichier(s) associé(s) seront également supprimé(s) de Google Drive.`
+      : '';
+    
+    if (!confirm(`Supprimer définitivement cette tâche ?${fileMessage}`)) return;
+    
     try {
+      // Supprimer les fichiers Google Drive avant de supprimer la tâche
+      if (fileCount > 0) {
+        // Les fichiers seront supprimés via l'API lors de la suppression de la tâche
+        // On utilise l'API pour supprimer les fichiers
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          const attachments = await getAllAttachmentsForTask(taskId);
+          for (const attachment of attachments) {
+            try {
+              await fetch(`/api/attachments/${attachment.id}`, {
+                method: 'DELETE',
+                headers: {
+                  'Authorization': `Bearer ${session.access_token}`,
+                },
+              });
+            } catch (err) {
+              console.error('Erreur lors de la suppression du fichier:', err);
+              // Continuer même si un fichier échoue
+            }
+          }
+        }
+      }
+      
       await deleteEventTask(taskId);
       await loadEvent();
     } catch (err: any) {
@@ -182,8 +323,46 @@ export default function EventDetailPage() {
 
   async function handleDeletePost(postId: string) {
     if (!isAdmin) return;
-    if (!confirm('Supprimer ce poste et toutes ses tâches ?')) return;
+    
+    // Compter les fichiers associés à toutes les tâches du poste
+    if (!event) return;
+    const post = event.posts.find(p => p.id === postId);
+    if (!post) return;
+    
+    let totalFiles = 0;
+    for (const task of post.tasks) {
+      totalFiles += await countAttachmentsForTask(task.id);
+    }
+    
+    const fileMessage = totalFiles > 0 
+      ? `\n\n⚠️ Attention : ${totalFiles} fichier(s) associé(s) seront également supprimé(s) de Google Drive.`
+      : '';
+    
+    if (!confirm(`Supprimer ce poste et toutes ses tâches ?${fileMessage}`)) return;
+    
     try {
+      // Supprimer les fichiers Google Drive avant de supprimer le poste
+      if (totalFiles > 0) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          for (const task of post.tasks) {
+            const attachments = await getAllAttachmentsForTask(task.id);
+            for (const attachment of attachments) {
+              try {
+                await fetch(`/api/attachments/${attachment.id}`, {
+                  method: 'DELETE',
+                  headers: {
+                    'Authorization': `Bearer ${session.access_token}`,
+                  },
+                });
+              } catch (err) {
+                console.error('Erreur lors de la suppression du fichier:', err);
+              }
+            }
+          }
+        }
+      }
+      
       await deleteEventPost(postId);
       await loadEvent();
     } catch (err: any) {
@@ -193,8 +372,40 @@ export default function EventDetailPage() {
 
   async function handleDeleteEvent() {
     if (!isAdmin || !event) return;
-    if (!confirm('Supprimer définitivement cet événement ?')) return;
+    
+    // Compter les fichiers associés à toutes les tâches de l'événement
+    const fileCount = await countAttachmentsForEvent(event.id);
+    const fileMessage = fileCount > 0 
+      ? `\n\n⚠️ Attention : ${fileCount} fichier(s) associé(s) seront également supprimé(s) de Google Drive.`
+      : '';
+    
+    if (!confirm(`Supprimer définitivement cet événement ?${fileMessage}`)) return;
+    
     try {
+      // Supprimer les fichiers Google Drive avant de supprimer l'événement
+      if (fileCount > 0) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          for (const post of event.posts) {
+            for (const task of post.tasks) {
+              const attachments = await getAllAttachmentsForTask(task.id);
+              for (const attachment of attachments) {
+                try {
+                  await fetch(`/api/attachments/${attachment.id}`, {
+                    method: 'DELETE',
+                    headers: {
+                      'Authorization': `Bearer ${session.access_token}`,
+                    },
+                  });
+                } catch (err) {
+                  console.error('Erreur lors de la suppression du fichier:', err);
+                }
+              }
+            }
+          }
+        }
+      }
+      
       await deleteEvent(event.id);
       router.push('/');
     } catch (err: any) {
@@ -212,6 +423,32 @@ export default function EventDetailPage() {
       });
       setCommentTexts({ ...commentTexts, [taskId]: '' });
       setShowCommentInputs({ ...showCommentInputs, [taskId]: false });
+      await loadEvent();
+    } catch (err: any) {
+      alert('Erreur: ' + err.message);
+    }
+  }
+
+  function canDeleteComment(comment: any, allComments: any[]): boolean {
+    if (!user || !comment.author_user_id) return false;
+    // Vérifier si l'utilisateur est l'auteur du commentaire
+    if (comment.author_user_id !== user.id) return false;
+    
+    // Vérifier s'il y a un commentaire créé après celui-ci
+    const commentDate = new Date(comment.created_at);
+    const hasLaterComments = allComments.some(c => 
+      c.id !== comment.id && new Date(c.created_at) > commentDate
+    );
+    
+    // On peut supprimer seulement s'il n'y a pas de commentaire créé après
+    return !hasLaterComments;
+  }
+
+  async function handleDeleteComment(commentId: string) {
+    if (!confirm('Êtes-vous sûr de vouloir supprimer ce commentaire ?')) return;
+    
+    try {
+      await deleteTaskComment(commentId);
       await loadEvent();
     } catch (err: any) {
       alert('Erreur: ' + err.message);
@@ -262,35 +499,54 @@ export default function EventDetailPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-        <div className="flex-1">
-          <Link href="/" className="text-sm text-gray-500 hover:text-gray-700 mb-2 inline-block">
+      <div className="card space-y-4">
+        <div className="flex items-center justify-between">
+          <Link href="/" className="text-sm text-gray-500 hover:text-gray-700">
             ← Retour aux événements
-          </Link>
-          <h1 className="text-2xl font-semibold text-secondary">{event.name}</h1>
-          <p className="text-gray-600 mt-1">
-            {formatDateFullFrench(event.event_date)} • {event.team.name}
-          </p>
-          {event.posts.length > 0 && (
-            <p className="text-xs text-gray-500 mt-2">
-              Les tâches affichent le responsable défini dans le modèle ou dans l'événement.
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href={`/events/${event.id}/edit`}
-            className="btn-primary"
-          >
-            Modifier
           </Link>
           {isAdmin && (
             <button
               onClick={handleDeleteEvent}
               className="btn-secondary text-sm text-red-600 hover:text-red-700 border-red-200"
             >
-              Supprimer
+              Supprimer l'événement
             </button>
+          )}
+        </div>
+        
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wide">Nom de l'événement</label>
+            <input
+              type="text"
+              defaultValue={event.name}
+              onBlur={(e) => handleEventFieldUpdate('name', e.target.value)}
+              className="input text-xl font-semibold text-secondary w-full"
+              placeholder="Nom de l'événement"
+            />
+          </div>
+          
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wide">Date de l'événement</label>
+              <input
+                type="date"
+                defaultValue={event.event_date}
+                onBlur={(e) => handleEventFieldUpdate('event_date', e.target.value)}
+                className="input w-full"
+              />
+            </div>
+            <div className="flex items-end">
+              <p className="text-sm text-gray-600">
+                {formatDateFullFrench(event.event_date)} • {event.team.name}
+              </p>
+            </div>
+          </div>
+          
+          {event.posts.length > 0 && (
+            <p className="text-xs text-gray-500 pt-2 border-t">
+              Les tâches affichent le responsable défini dans le modèle ou dans l'événement.
+            </p>
           )}
         </div>
       </div>
@@ -365,6 +621,56 @@ export default function EventDetailPage() {
             {bulkCompleting ? 'Validation...' : `Valider la sélection (${selectedTaskIds.length})`}
           </button>
         </div>
+
+        {newPostFormOpen && (
+          <form onSubmit={handleCreatePostSubmit} className="card border-dashed border-2 border-gray-300 bg-gray-50 space-y-3">
+            <h3 className="font-medium text-sm text-secondary">Nouveau poste</h3>
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">Nom du poste <span className="text-red-500">*</span></label>
+              <input
+                type="text"
+                value={newPostFormData.name}
+                onChange={(e) => setNewPostFormData((prev) => ({ ...prev, name: e.target.value }))}
+                className="input text-sm"
+                placeholder="Ex: Entrée"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">Responsable (optionnel)</label>
+              <input
+                type="text"
+                value={newPostFormData.responsible}
+                onChange={(e) => setNewPostFormData((prev) => ({ ...prev, responsible: e.target.value }))}
+                className="input text-sm"
+                placeholder="Nom du responsable"
+                list="event-post-responsible-suggestions"
+              />
+            </div>
+            <div className="flex justify-end gap-2 text-sm">
+              <button type="button" className="btn-secondary" onClick={handleCancelNewPost}>
+                Annuler
+              </button>
+              <button type="submit" className="btn-primary">
+                Ajouter le poste
+              </button>
+            </div>
+          </form>
+        )}
+
+        {event.posts.length === 0 && !newPostFormOpen && (
+          <div className="card text-center py-8">
+            <p className="text-gray-500 mb-4">Aucun poste défini pour cet événement</p>
+            <button
+              type="button"
+              onClick={handleAddPost}
+              className="btn-primary"
+            >
+              + Ajouter un poste
+            </button>
+          </div>
+        )}
+
         {event.posts.map((post) => {
           const postDefaultName = post.default_responsible_name?.trim() || formatUserName(post.default_user, 'Non assigné');
           const filteredTasks = post.tasks.filter((task) => {
@@ -434,7 +740,7 @@ export default function EventDetailPage() {
                     >
                       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-2 flex-wrap">
+                          <div className="flex items-center gap-2 mb-3 flex-wrap">
                             <input
                               type="checkbox"
                               className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent"
@@ -457,33 +763,82 @@ export default function EventDetailPage() {
                                 </span>
                               </>
                             )}
-                            <span className="font-medium text-secondary">{task.name}</span>
                             {isCompleted && (
                               <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded">✓ Complétée</span>
                             )}
                           </div>
                           
-                          <div className="space-y-1 text-sm text-gray-600">
-                            {task.alert_date && !isCompleted && (
-                              <div>
-                                <span className="font-medium">Alerte:</span> {formatDateISO(task.alert_date)}
-                              </div>
-                            )}
-                            {task.due_date && (
-                              <div>
-                                <span className="font-medium">Échéance critique:</span> {formatDateISO(task.due_date)}
-                              </div>
-                            )}
-                            
+                          {/* Champs éditables directement */}
+                          <div className="space-y-2 text-sm">
                             <div>
-                              <span className="font-medium">Assigné à:</span> {assigneeName}
+                              <label className="block text-xs text-gray-500 mb-1">Nom de la tâche</label>
+                              <input
+                                type="text"
+                                defaultValue={task.name || ''}
+                                onBlur={(e) => handleTaskFieldUpdate(task.id, 'name', e.target.value)}
+                                className="input text-sm w-full"
+                                disabled={isCompleted}
+                                placeholder="Nom de la tâche"
+                              />
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-xs text-gray-500 mb-1">Date d'alerte</label>
+                                <input
+                                  type="date"
+                                  defaultValue={task.alert_date || ''}
+                                  onBlur={(e) => handleTaskFieldUpdate(task.id, 'alert_date', e.target.value)}
+                                  className="input text-sm w-full"
+                                  disabled={isCompleted}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs text-gray-500 mb-1">Date d'échéance</label>
+                                <input
+                                  type="date"
+                                  defaultValue={task.due_date || ''}
+                                  onBlur={(e) => handleTaskFieldUpdate(task.id, 'due_date', e.target.value)}
+                                  className="input text-sm w-full"
+                                  disabled={isCompleted}
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-1">Date de référence (optionnel)</label>
+                              <input
+                                type="date"
+                                defaultValue={task.reference_date || event?.event_date || ''}
+                                onBlur={(e) => handleTaskFieldUpdate(task.id, 'reference_date', e.target.value)}
+                                className="input text-sm w-full"
+                                disabled={isCompleted}
+                              />
+                              <p className="text-[10px] text-gray-500 mt-1">
+                                Par défaut : date de l'événement. Les délais sont calculés à partir de cette date.
+                              </p>
+                            </div>
+
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-1">Responsable</label>
+                              <input
+                                type="text"
+                                defaultValue={task.responsible_name || ''}
+                                onBlur={(e) => handleTaskFieldUpdate(task.id, 'responsible_name', e.target.value)}
+                                className="input text-sm w-full"
+                                disabled={isCompleted}
+                                placeholder={postDefaultName || 'Responsable'}
+                                list="event-task-responsible"
+                              />
                               {usesPostDefault && (
-                                <span className="text-xs text-gray-500 ml-2">(responsable du poste)</span>
+                                <p className="text-[10px] text-gray-500 mt-1">
+                                  Utilise le responsable par défaut du poste ({postDefaultName})
+                                </p>
                               )}
                             </div>
-                            
+
                             {task.completed_by_user && (
-                              <div className="text-green-600">
+                              <div className="text-green-600 text-sm">
                                 <span className="font-medium">Complétée par:</span> {formatUserName(task.completed_by_user)}
                                 {task.completed_at && (
                                   <span className="text-gray-500">
@@ -494,21 +849,63 @@ export default function EventDetailPage() {
                             )}
                           </div>
 
-                          {/* Commentaires */}
+                          {/* Pièces jointes de la tâche */}
+                          <AttachmentManager
+                            taskId={task.id}
+                            onAttachmentsChange={loadEvent}
+                          />
+
+                          {/* Commentaires - toujours visibles */}
                           {task.comments && task.comments.length > 0 && (
-                            <div className="mt-4 space-y-2 pt-3 border-t border-gray-100">
-                              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Commentaires:</div>
-                              {task.comments.map((comment) => (
-                                <div key={comment.id} className="bg-gray-50 rounded-lg p-3 text-sm">
-                                  <div className="font-medium text-gray-700 mb-1">
-                                    {formatUserName(comment.author, 'Anonyme')}
+                            <div className="mt-4 space-y-2 pt-3 border-t border-gray-200">
+                              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Commentaires et historique:</div>
+                              {task.comments.map((comment) => {
+                                const isModification = comment.content.startsWith('Modification:');
+                                const canDelete = canDeleteComment(comment, task.comments || []);
+                                return (
+                                  <div key={comment.id} className={`rounded-lg p-3 text-sm ${isModification ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50'} relative`}>
+                                    <div className="flex items-start justify-between gap-2 mb-1">
+                                      <div className="font-medium text-gray-700">
+                                        {formatUserName(comment.author, 'Anonyme')}
+                                        {isModification && <span className="text-xs text-blue-600 ml-2">(modification)</span>}
+                                      </div>
+                                      {canDelete && (
+                                        <button
+                                          onClick={() => handleDeleteComment(comment.id)}
+                                          className="text-xs text-red-600 hover:text-red-700 ml-auto"
+                                          title="Supprimer ce commentaire"
+                                        >
+                                          Supprimer
+                                        </button>
+                                      )}
+                                    </div>
+                                    <div className={`${isModification ? 'text-gray-700 whitespace-pre-line' : 'text-gray-600'}`}>
+                                      {comment.content}
+                                    </div>
+                                    {/* Pièces jointes du commentaire */}
+                                    {comment.attachments && comment.attachments.length > 0 && (
+                                      <div className="mt-2 space-y-1">
+                                        {comment.attachments.map((attachment) => (
+                                          <div key={attachment.id} className="flex items-center gap-2 text-xs">
+                                            <span>📎</span>
+                                            <a
+                                              href={attachment.google_drive_web_view_link || attachment.google_drive_download_link || '#'}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="text-blue-600 hover:text-blue-800"
+                                            >
+                                              {attachment.file_name}
+                                            </a>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                    <div className="text-xs text-gray-400 mt-1">
+                                      {new Date(comment.created_at).toLocaleString('fr-FR')}
+                                    </div>
                                   </div>
-                                  <div className="text-gray-600">{comment.content}</div>
-                                  <div className="text-xs text-gray-400 mt-1">
-                                    {new Date(comment.created_at).toLocaleString('fr-FR')}
-                                  </div>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           )}
 
@@ -521,7 +918,7 @@ export default function EventDetailPage() {
                               <span>+</span> Ajouter un commentaire
                             </button>
                           ) : (
-                            <div className="mt-4 space-y-2 pt-3 border-t border-gray-100">
+                            <div className="mt-4 space-y-2 pt-3 border-t border-gray-200">
                               <textarea
                                 value={commentTexts[task.id] || ''}
                                 onChange={(e) => setCommentTexts({ ...commentTexts, [task.id]: e.target.value })}
@@ -572,7 +969,7 @@ export default function EventDetailPage() {
                               onClick={() => handleDeleteTask(task.id)}
                               className="btn-secondary text-sm py-2 px-4 flex-1 sm:flex-none text-red-600 border-red-200 hover:text-red-700"
                             >
-                              Supprimer la tâche
+                              Supprimer
                             </button>
                           )}
                         </div>
@@ -608,23 +1005,21 @@ export default function EventDetailPage() {
                     list="event-task-responsible"
                   />
                 </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">
+                    Date de référence (optionnel)
+                  </label>
+                  <input
+                    type="date"
+                    value={newTaskForm.referenceDate}
+                    onChange={(e) => setNewTaskForm((prev) => (prev ? { ...prev, referenceDate: e.target.value } : prev))}
+                    className="input text-sm"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Par défaut : date de l'événement ({event.event_date}). Les délais sont calculés à partir de cette date.
+                  </p>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1">
-                      Délai critique (jours avant) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={newTaskForm.criticalDelay}
-                      onChange={(e) =>
-                        setNewTaskForm((prev) => (prev ? { ...prev, criticalDelay: e.target.value } : prev))
-                      }
-                      className="input text-sm"
-                      placeholder="0"
-                      required
-                    />
-                  </div>
                   <div>
                     <label className="block text-xs text-gray-600 mb-1">
                       Délai d'alerte (jours avant) <span className="text-red-500">*</span>
@@ -643,6 +1038,22 @@ export default function EventDetailPage() {
                     <p className="text-[10px] text-gray-500 mt-1">
                       Doit être supérieur ou égal au délai critique.
                     </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-600 mb-1">
+                      Délai critique (jours avant) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={newTaskForm.criticalDelay}
+                      onChange={(e) =>
+                        setNewTaskForm((prev) => (prev ? { ...prev, criticalDelay: e.target.value } : prev))
+                      }
+                      className="input text-sm"
+                      placeholder="0"
+                      required
+                    />
                   </div>
                 </div>
                 <div className="flex justify-end gap-2 text-sm">
@@ -667,8 +1078,25 @@ export default function EventDetailPage() {
             )}
           </div>
         )})}
+
+        {event.posts.length > 0 && !newPostFormOpen && !newTaskForm && (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={handleAddPost}
+              className="btn-secondary text-sm"
+            >
+              + Ajouter un poste
+            </button>
+          </div>
+        )}
       </div>
       <datalist id="event-task-responsible">
+        {responsibleOptions.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
+      <datalist id="event-post-responsible-suggestions">
         {responsibleOptions.map((name) => (
           <option key={name} value={name} />
         ))}

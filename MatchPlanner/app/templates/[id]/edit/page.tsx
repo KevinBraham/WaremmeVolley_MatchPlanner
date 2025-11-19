@@ -657,39 +657,39 @@ export default function EditTemplatePage() {
                       </div>
                       <div>
                         <label className="block text-xs text-gray-600 mb-1">
-                          Délai critique (jours avant) <span className="text-red-500">*</span>
+                          Délai d'alerte (jours avant) <span className="text-red-500">*</span>
                         </label>
                         <input
                           type="number"
                           min="0"
-                          value={newTaskForm.criticalDelay}
+                          value={newTaskForm.alertDelay}
                           onChange={(e) =>
-                            setNewTaskForm((prev) => (prev ? { ...prev, criticalDelay: e.target.value } : prev))
+                            setNewTaskForm((prev) => (prev ? { ...prev, alertDelay: e.target.value } : prev))
                           }
                           className="input text-sm"
                           placeholder="0"
                           required
                         />
+                        <p className="text-[10px] text-gray-500 mt-1">
+                          Doit être supérieur ou égal au délai critique.
+                        </p>
                       </div>
                     </div>
                     <div>
                       <label className="block text-xs text-gray-600 mb-1">
-                        Délai d'alerte (jours avant) <span className="text-red-500">*</span>
+                        Délai critique (jours avant) <span className="text-red-500">*</span>
                       </label>
                       <input
                         type="number"
                         min="0"
-                        value={newTaskForm.alertDelay}
+                        value={newTaskForm.criticalDelay}
                         onChange={(e) =>
-                          setNewTaskForm((prev) => (prev ? { ...prev, alertDelay: e.target.value } : prev))
+                          setNewTaskForm((prev) => (prev ? { ...prev, criticalDelay: e.target.value } : prev))
                         }
                         className="input text-sm"
                         placeholder="0"
                         required
                       />
-                      <p className="text-[10px] text-gray-500 mt-1">
-                        Doit être supérieur ou égal au délai critique.
-                      </p>
                     </div>
                     <div>
                       <label className="block text-xs text-gray-600 mb-1">Responsable (optionnel)</label>

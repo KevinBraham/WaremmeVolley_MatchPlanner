@@ -3,7 +3,8 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/hooks/useAuth';
-import { getEventWithDetails, updateEvent, createEventPost, createEventTask, updateEventPost, updateEventTask, deleteEventPost, deleteEventTask } from '@/lib/supabase/queries';
+import { getEventWithDetails, updateEvent, createEventPost, createEventTask, updateEventPost, updateEventTask, deleteEventPost, deleteEventTask, countAttachmentsForTask, getAllAttachmentsForTask } from '@/lib/supabase/queries';
+import { supabase } from '@/lib/supabaseClient';
 import type { EventWithDetails, EventUpdate, EventPost, EventTask } from '@/lib/types/database';
 import { addDays } from '@/lib/utils/date';
 import { formatUserName } from '@/lib/utils/user';
@@ -27,6 +28,7 @@ export default function EditEventPage() {
     criticalDelay: string;
     alertDelay: string;
     responsible: string;
+    referenceDate: string;
   } | null>(null);
   const isAdmin = profile?.role === 'admin';
   
@@ -129,9 +131,46 @@ export default function EditEventPage() {
   }
 
   async function handleDeletePost(postId: string) {
-    if (!isAdmin) return;
-    if (!confirm('Êtes-vous sûr de vouloir supprimer ce poste ?')) return;
+    if (!isAdmin || !event) return;
+    
+    // Compter les fichiers associés à toutes les tâches du poste
+    const post = event.posts.find(p => p.id === postId);
+    if (!post) return;
+    
+    let totalFiles = 0;
+    for (const task of post.tasks) {
+      totalFiles += await countAttachmentsForTask(task.id);
+    }
+    
+    const fileMessage = totalFiles > 0 
+      ? `\n\n⚠️ Attention : ${totalFiles} fichier(s) associé(s) seront également supprimé(s) de Google Drive.`
+      : '';
+    
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer ce poste ?${fileMessage}`)) return;
+    
     try {
+      // Supprimer les fichiers Google Drive avant de supprimer le poste
+      if (totalFiles > 0) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          for (const task of post.tasks) {
+            const attachments = await getAllAttachmentsForTask(task.id);
+            for (const attachment of attachments) {
+              try {
+                await fetch(`/api/attachments/${attachment.id}`, {
+                  method: 'DELETE',
+                  headers: {
+                    'Authorization': `Bearer ${session.access_token}`,
+                  },
+                });
+              } catch (err) {
+                console.error('Erreur lors de la suppression du fichier:', err);
+              }
+            }
+          }
+        }
+      }
+      
       await deleteEventPost(postId);
       await loadEvent();
     } catch (err: any) {
@@ -141,23 +180,28 @@ export default function EditEventPage() {
 
   function handleAddTask(postId: string) {
     setNewPostFormOpen(false);
-    setNewTaskForm({ postId, name: '', criticalDelay: '', alertDelay: '', responsible: '' });
+    setNewTaskForm({ postId, name: '', criticalDelay: '', alertDelay: '', responsible: '', referenceDate: event?.event_date || '' });
   }
 
   const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
-  function computeDelayFromDate(dateString: string | null, eventDate: string): number | null {
+  function getReferenceDate(task: EventTask | null): string {
+    if (!task) return event?.event_date || '';
+    return task.reference_date || event?.event_date || '';
+  }
+
+  function computeDelayFromDate(dateString: string | null, referenceDate: string): number | null {
     if (!dateString) return null;
-    const eventDateObj = new Date(eventDate);
+    const refDateObj = new Date(referenceDate);
     const target = new Date(dateString);
-    eventDateObj.setHours(0, 0, 0, 0);
+    refDateObj.setHours(0, 0, 0, 0);
     target.setHours(0, 0, 0, 0);
-    const diffDays = Math.round((eventDateObj.getTime() - target.getTime()) / MS_PER_DAY);
+    const diffDays = Math.round((refDateObj.getTime() - target.getTime()) / MS_PER_DAY);
     return diffDays >= 0 ? diffDays : 0;
   }
 
-  function computeDateFromDelay(eventDate: string, delay: number): string {
-    return addDays(eventDate, -delay);
+  function computeDateFromDelay(referenceDate: string, delay: number): string {
+    return addDays(referenceDate, -delay);
   }
 
   function handleTaskDelayChange(
@@ -170,7 +214,9 @@ export default function EditEventPage() {
       if (!prev) return prev;
       const parsed = rawValue === '' ? null : parseInt(rawValue, 10);
       const delay = parsed === null || Number.isNaN(parsed) ? null : Math.max(0, parsed);
-      const newDate = delay === null ? null : computeDateFromDelay(prev.event_date, delay);
+      const currentTask = prev.posts.find((p) => p.id === postId)?.tasks.find((t) => t.id === taskId);
+      const refDate = getReferenceDate(currentTask || null);
+      const newDate = delay === null ? null : computeDateFromDelay(refDate, delay);
 
       return {
         ...prev,
@@ -218,8 +264,9 @@ export default function EditEventPage() {
     const currentTask = currentPost?.tasks.find((t) => t.id === taskId);
     if (!currentTask) return;
 
-    const currentAlertDelay = computeDelayFromDate(currentTask.alert_date, event.event_date);
-    const currentCriticalDelay = computeDelayFromDate(currentTask.due_date, event.event_date);
+    const refDate = getReferenceDate(currentTask);
+    const currentAlertDelay = computeDelayFromDate(currentTask.alert_date, refDate);
+    const currentCriticalDelay = computeDelayFromDate(currentTask.due_date, refDate);
 
     if (field === 'alert' && currentCriticalDelay !== null && delay < currentCriticalDelay) {
       alert('Le délai d\'alerte doit être supérieur ou égal au délai critique.');
@@ -233,13 +280,13 @@ export default function EditEventPage() {
       return;
     }
 
-    const newDate = computeDateFromDelay(event.event_date, delay);
+    const newDate = computeDateFromDelay(refDate, delay);
 
     try {
       if (field === 'alert') {
-        await updateEventTask(taskId, { alert_date: newDate });
+        await updateEventTask(taskId, { alert_date: newDate }, user?.id, true);
       } else {
-        await updateEventTask(taskId, { due_date: newDate });
+        await updateEventTask(taskId, { due_date: newDate }, user?.id, true);
       }
     } catch (err: any) {
       alert('Erreur: ' + err.message);
@@ -281,8 +328,10 @@ export default function EditEventPage() {
       return;
     }
 
-    const dueDate = computeDateFromDelay(event.event_date, criticalDelay);
-    const alertDate = computeDateFromDelay(event.event_date, alertDelay);
+    // Utiliser la date de référence de la tâche si elle existe, sinon celle de l'événement
+    const refDate = newTaskForm.referenceDate.trim() || event.event_date;
+    const dueDate = computeDateFromDelay(refDate, criticalDelay);
+    const alertDate = computeDateFromDelay(refDate, alertDelay);
 
     try {
       const maxPosition = Math.max(...post.tasks.map((t) => t.position), -1);
@@ -293,6 +342,7 @@ export default function EditEventPage() {
         responsible_name: newTaskForm.responsible.trim() || post.default_responsible_name || null,
         due_date: dueDate,
         alert_date: alertDate,
+        reference_date: newTaskForm.referenceDate.trim() || null,
         completed_at: null,
         completed_by: null,
         status: 'todo',
@@ -352,16 +402,82 @@ export default function EditEventPage() {
     const trimmed = name.trim() || null;
     setEventTaskField(postId, taskId, { responsible_name: trimmed || '' });
     try {
-      await updateEventTask(taskId, { responsible_name: trimmed });
+      await updateEventTask(taskId, { responsible_name: trimmed }, user?.id, true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
   }
 
+  async function handleTaskReferenceDateSave(postId: string, taskId: string, date: string) {
+    if (!event) return;
+    
+    const trimmed = date.trim() || null;
+    const currentPost = event.posts.find((p) => p.id === postId);
+    const currentTask = currentPost?.tasks.find((t) => t.id === taskId);
+    if (!currentTask) return;
+
+    // Calculer les délais actuels à partir de l'ancienne date de référence
+    const oldRefDate = getReferenceDate(currentTask);
+    const alertDelay = computeDelayFromDate(currentTask.alert_date, oldRefDate);
+    const criticalDelay = computeDelayFromDate(currentTask.due_date, oldRefDate);
+
+    setEventTaskField(postId, taskId, { reference_date: trimmed || '' });
+    
+    try {
+      const newRefDate = trimmed || event.event_date;
+      
+      // Recalculer les dates d'alerte et critique avec la nouvelle date de référence en conservant les délais
+      const updates: { reference_date: string | null; alert_date?: string; due_date?: string } = {
+        reference_date: trimmed,
+      };
+      
+      if (alertDelay !== null) {
+        updates.alert_date = computeDateFromDelay(newRefDate, alertDelay);
+      }
+      if (criticalDelay !== null) {
+        updates.due_date = computeDateFromDelay(newRefDate, criticalDelay);
+      }
+      
+      await updateEventTask(taskId, updates, user?.id, true);
+      await loadEvent();
+    } catch (err: any) {
+      alert('Erreur: ' + err.message);
+      await loadEvent();
+    }
+  }
+
   async function handleDeleteTask(taskId: string) {
     if (!isAdmin) return;
-    if (!confirm('Êtes-vous sûr de vouloir supprimer cette tâche ?')) return;
+    
+    // Compter les fichiers associés
+    const fileCount = await countAttachmentsForTask(taskId);
+    const fileMessage = fileCount > 0 
+      ? `\n\n⚠️ Attention : ${fileCount} fichier(s) associé(s) seront également supprimé(s) de Google Drive.`
+      : '';
+    
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer cette tâche ?${fileMessage}`)) return;
+    
     try {
+      // Supprimer les fichiers Google Drive avant de supprimer la tâche
+      if (fileCount > 0) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          const attachments = await getAllAttachmentsForTask(taskId);
+          for (const attachment of attachments) {
+            try {
+              await fetch(`/api/attachments/${attachment.id}`, {
+                method: 'DELETE',
+                headers: {
+                  'Authorization': `Bearer ${session.access_token}`,
+                },
+              });
+            } catch (err) {
+              console.error('Erreur lors de la suppression du fichier:', err);
+            }
+          }
+        }
+      }
+      
       await deleteEventTask(taskId);
       await loadEvent();
     } catch (err: any) {
@@ -574,8 +690,9 @@ export default function EditEventPage() {
                       {post.tasks.map((task) => {
                         const taskColor = getTaskStatusColor(task);
                         const isCompleted = Boolean(task.completed_at);
-                        const alertDelay = computeDelayFromDate(task.alert_date, event.event_date);
-                        const criticalDelay = computeDelayFromDate(task.due_date, event.event_date);
+                        const refDate = getReferenceDate(task);
+                        const alertDelay = computeDelayFromDate(task.alert_date, refDate);
+                        const criticalDelay = computeDelayFromDate(task.due_date, refDate);
                         const criticalValue = String(criticalDelay ?? alertDelay ?? 0);
                         const alertValue = String(alertDelay ?? criticalDelay ?? 0);
 
@@ -661,6 +778,25 @@ export default function EditEventPage() {
 
                             <div>
                               <label className="block text-xs text-gray-600 mb-1">
+                                Date de référence (optionnel)
+                              </label>
+                              <input
+                                type="date"
+                                value={task.reference_date || event.event_date}
+                                onChange={(e) =>
+                                  setEventTaskField(post.id, task.id, { reference_date: e.target.value || null })
+                                }
+                                onBlur={(e) => handleTaskReferenceDateSave(post.id, task.id, e.target.value)}
+                                className="input text-sm"
+                                disabled={isCompleted}
+                              />
+                              <p className="text-[10px] text-gray-500 mt-1">
+                                Par défaut : date de l'événement ({event.event_date}). Les délais sont calculés à partir de cette date.
+                              </p>
+                            </div>
+
+                            <div>
+                              <label className="block text-xs text-gray-600 mb-1">
                                 Responsable de la tâche
                               </label>
                               <input
@@ -719,21 +855,17 @@ export default function EditEventPage() {
                         </div>
                         <div>
                           <label className="block text-xs text-gray-600 mb-1">
-                            Délai critique (jours avant) <span className="text-red-500">*</span>
+                            Date de référence (optionnel)
                           </label>
                           <input
-                            type="number"
-                            min={0}
-                            value={newTaskForm.criticalDelay}
-                            onChange={(e) =>
-                              setNewTaskForm((prev) =>
-                                prev ? { ...prev, criticalDelay: e.target.value } : prev
-                              )
-                            }
+                            type="date"
+                            value={newTaskForm.referenceDate}
+                            onChange={(e) => setNewTaskForm((prev) => prev ? { ...prev, referenceDate: e.target.value } : prev)}
                             className="input text-sm"
-                            placeholder="Ex : 3"
-                            required
                           />
+                          <p className="text-[10px] text-gray-500 mt-1">
+                            Par défaut : date de l'événement ({event.event_date}). Les délais sont calculés à partir de cette date.
+                          </p>
                         </div>
                         <div>
                           <label className="block text-xs text-gray-600 mb-1">
@@ -755,6 +887,24 @@ export default function EditEventPage() {
                           <p className="text-[10px] text-gray-500 mt-1">
                             Doit être supérieur ou égal au délai critique.
                           </p>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600 mb-1">
+                            Délai critique (jours avant) <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={newTaskForm.criticalDelay}
+                            onChange={(e) =>
+                              setNewTaskForm((prev) =>
+                                prev ? { ...prev, criticalDelay: e.target.value } : prev
+                              )
+                            }
+                            className="input text-sm"
+                            placeholder="Ex : 3"
+                            required
+                          />
                         </div>
                         <div className="flex justify-end gap-2 text-sm">
                           <button type="button" className="btn-secondary" onClick={handleCancelNewTask}>
