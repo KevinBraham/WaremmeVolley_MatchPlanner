@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { getEventWithDetails, updateEvent, createEventPost, createEventTask, updateEventPost, updateEventTask, deleteEventPost, deleteEventTask, countAttachmentsForTask, getAllAttachmentsForTask, renameEventTask } from '@/lib/supabase/queries';
@@ -32,6 +32,9 @@ export default function EditEventPage() {
   } | null>(null);
   const isAdmin = profile?.role === 'admin';
   
+  // Référence pour sauvegarder la position de scroll
+  const scrollPositionRef = useRef<number>(0);
+  
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -48,9 +51,13 @@ export default function EditEventPage() {
     }
   }, [params.id, isAuthenticated, authLoading]);
 
-  async function loadEvent() {
+  async function loadEvent(restoreScroll: boolean = false) {
     try {
       setLoading(true);
+      // Sauvegarder la position de scroll avant le rechargement
+      if (restoreScroll && typeof window !== 'undefined') {
+        scrollPositionRef.current = window.scrollY || document.documentElement.scrollTop;
+      }
       const eventData = await getEventWithDetails(params.id as string);
       if (!eventData) {
         setError('Événement non trouvé');
@@ -66,6 +73,18 @@ export default function EditEventPage() {
       setError(err.message || 'Erreur lors du chargement de l\'événement');
     } finally {
       setLoading(false);
+      // Restaurer la position de scroll après le chargement
+      if (restoreScroll && typeof window !== 'undefined') {
+        // Utiliser un double requestAnimationFrame pour s'assurer que le DOM est complètement mis à jour
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            window.scrollTo({
+              top: scrollPositionRef.current,
+              behavior: 'auto'
+            });
+          });
+        });
+      }
     }
   }
 
@@ -119,7 +138,7 @@ export default function EditEventPage() {
       });
       setNewPostFormOpen(false);
       setNewPostFormData({ name: '', responsible: '' });
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -172,7 +191,7 @@ export default function EditEventPage() {
       }
       
       await deleteEventPost(postId);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -249,14 +268,14 @@ export default function EditEventPage() {
     const trimmed = rawValue.trim();
     if (!trimmed) {
       alert(`Le délai ${field === 'critical' ? 'critique' : 'd\'alerte'} est obligatoire.`);
-      await loadEvent();
+      await loadEvent(true);
       return;
     }
 
     const delay = parseInt(trimmed, 10);
     if (Number.isNaN(delay) || delay < 0) {
       alert('Les délais doivent être des nombres positifs.');
-      await loadEvent();
+      await loadEvent(true);
       return;
     }
 
@@ -270,13 +289,13 @@ export default function EditEventPage() {
 
     if (field === 'alert' && currentCriticalDelay !== null && delay < currentCriticalDelay) {
       alert('Le délai d\'alerte doit être supérieur ou égal au délai critique.');
-      await loadEvent();
+      await loadEvent(true);
       return;
     }
 
     if (field === 'critical' && currentAlertDelay !== null && currentAlertDelay < delay) {
       alert('Le délai critique doit être inférieur ou égal au délai d\'alerte.');
-      await loadEvent();
+      await loadEvent(true);
       return;
     }
 
@@ -290,7 +309,7 @@ export default function EditEventPage() {
       }
     } catch (err: any) {
       alert('Erreur: ' + err.message);
-      await loadEvent();
+      await loadEvent(true);
     }
   }
 
@@ -349,7 +368,7 @@ export default function EditEventPage() {
         position: maxPosition + 1,
       });
       setNewTaskForm(null);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -409,10 +428,10 @@ export default function EditEventPage() {
     setEventTaskField(postId, taskId, { name: trimmed });
     try {
       await renameEventTask(taskId, trimmed, user?.id, true);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
-      await loadEvent();
+      await loadEvent(true);
     }
   }
 
@@ -457,10 +476,10 @@ export default function EditEventPage() {
       }
       
       await updateEventTask(taskId, updates, user?.id, true);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
-      await loadEvent();
+      await loadEvent(true);
     }
   }
 
@@ -497,7 +516,7 @@ export default function EditEventPage() {
       }
       
       await deleteEventTask(taskId);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }

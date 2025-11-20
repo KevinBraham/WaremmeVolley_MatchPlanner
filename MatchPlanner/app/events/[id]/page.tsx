@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, FormEvent } from 'react';
+import { useEffect, useMemo, useState, FormEvent, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/hooks/useAuth';
 import {
@@ -54,6 +54,9 @@ export default function EventDetailPage() {
   const [bulkCompleting, setBulkCompleting] = useState(false);
   // Suppression du mode édition - les tâches sont directement éditables
   const isAdmin = profile?.role === 'admin';
+  
+  // Référence pour sauvegarder la position de scroll
+  const scrollPositionRef = useRef<number>(0);
 
   useEffect(() => {
     if (!authLoading) {
@@ -65,9 +68,13 @@ export default function EventDetailPage() {
     }
   }, [params.id, isAuthenticated, authLoading]);
 
-  async function loadEvent() {
+  async function loadEvent(restoreScroll: boolean = false) {
     try {
       setLoading(true);
+      // Sauvegarder la position de scroll avant le rechargement
+      if (restoreScroll && typeof window !== 'undefined') {
+        scrollPositionRef.current = window.scrollY || document.documentElement.scrollTop;
+      }
       const eventData = await getEventWithDetails(params.id as string);
       if (!eventData) {
         setError('Événement non trouvé');
@@ -80,6 +87,18 @@ export default function EventDetailPage() {
       setError(err.message || 'Erreur lors du chargement de l\'événement');
     } finally {
       setLoading(false);
+      // Restaurer la position de scroll après le chargement
+      if (restoreScroll && typeof window !== 'undefined') {
+        // Utiliser un double requestAnimationFrame pour s'assurer que le DOM est complètement mis à jour
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            window.scrollTo({
+              top: scrollPositionRef.current,
+              behavior: 'auto'
+            });
+          });
+        });
+      }
     }
   }
 
@@ -90,7 +109,7 @@ export default function EventDetailPage() {
       setBulkCompleting(true);
       setSelectedTaskIds([]);
       await Promise.all(tasksToComplete.map((taskId) => completeTask(taskId, user.id)));
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
       setSelectedTaskIds(tasksToComplete);
@@ -103,7 +122,7 @@ export default function EventDetailPage() {
     if (!user) return;
     try {
       await completeTask(taskId, user.id);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -112,7 +131,7 @@ export default function EventDetailPage() {
   async function handleReopenTask(taskId: string) {
     try {
       await reopenTask(taskId);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -145,7 +164,7 @@ export default function EventDetailPage() {
       });
       setNewPostFormOpen(false);
       setNewPostFormData({ name: '', responsible: '' });
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -216,7 +235,7 @@ export default function EventDetailPage() {
         position: maxPosition + 1,
       });
       setNewTaskForm(null);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -239,7 +258,7 @@ export default function EventDetailPage() {
 
       if (Object.keys(updates).length > 0) {
         await updateEvent(event.id, updates);
-        await loadEvent();
+        await loadEvent(true);
       }
     } catch (err: any) {
       alert('Erreur: ' + err.message);
@@ -272,7 +291,7 @@ export default function EventDetailPage() {
 
       if (Object.keys(updates).length > 0) {
         await updateEventTask(taskId, updates, user.id, true);
-        await loadEvent();
+        await loadEvent(true);
       }
     } catch (err: any) {
       alert('Erreur: ' + err.message);
@@ -315,7 +334,7 @@ export default function EventDetailPage() {
       }
       
       await deleteEventTask(taskId);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -364,7 +383,7 @@ export default function EventDetailPage() {
       }
       
       await deleteEventPost(postId);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -423,7 +442,7 @@ export default function EventDetailPage() {
       });
       setCommentTexts({ ...commentTexts, [taskId]: '' });
       setShowCommentInputs({ ...showCommentInputs, [taskId]: false });
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -476,7 +495,7 @@ export default function EventDetailPage() {
     
     try {
       await deleteTaskComment(commentId);
-      await loadEvent();
+      await loadEvent(true);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
     }
@@ -879,7 +898,7 @@ export default function EventDetailPage() {
                           {/* Pièces jointes de la tâche */}
                           <AttachmentManager
                             taskId={task.id}
-                            onAttachmentsChange={loadEvent}
+                            onAttachmentsChange={() => loadEvent(true)}
                           />
 
                           {/* Commentaires - toujours visibles */}

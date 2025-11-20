@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/hooks/useAuth';
 import {
@@ -39,6 +39,9 @@ export default function EditTemplatePage() {
   } | null>(null);
   const isAdmin = profile?.role === 'admin';
   
+  // Référence pour sauvegarder la position de scroll
+  const scrollPositionRef = useRef<number>(0);
+  
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -54,9 +57,13 @@ export default function EditTemplatePage() {
     }
   }, [params.id, isAuthenticated, authLoading]);
 
-  async function loadTemplate() {
+  async function loadTemplate(restoreScroll: boolean = false) {
     try {
       setLoading(true);
+      // Sauvegarder la position de scroll avant le rechargement
+      if (restoreScroll && typeof window !== 'undefined') {
+        scrollPositionRef.current = window.scrollY || document.documentElement.scrollTop;
+      }
       const templateData = await getEventTemplateWithDetails(params.id as string);
       if (!templateData) {
         setError('Modèle non trouvé');
@@ -71,6 +78,18 @@ export default function EditTemplatePage() {
       setError(err.message || 'Erreur lors du chargement du modèle');
     } finally {
       setLoading(false);
+      // Restaurer la position de scroll après le chargement
+      if (restoreScroll && typeof window !== 'undefined') {
+        // Utiliser un double requestAnimationFrame pour s'assurer que le DOM est complètement mis à jour
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            window.scrollTo({
+              top: scrollPositionRef.current,
+              behavior: 'auto'
+            });
+          });
+        });
+      }
     }
   }
 
@@ -124,7 +143,7 @@ export default function EditTemplatePage() {
       });
       setNewPostFormOpen(false);
       setNewPostFormData({ name: '', responsible: '' });
-      await loadTemplate();
+      await loadTemplate(true);
       await syncFutureEventsWithTemplate(templateId);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
@@ -146,7 +165,7 @@ export default function EditTemplatePage() {
       if (!postToDelete) return;
       await removeTemplatePostFromFutureEvents(templateId, postToDelete);
       await deleteTemplatePost(postId);
-      await loadTemplate();
+      await loadTemplate(true);
       await syncFutureEventsWithTemplate(templateId);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
@@ -202,7 +221,7 @@ export default function EditTemplatePage() {
         position: maxPosition + 1,
       });
       setNewTaskForm(null);
-      await loadTemplate();
+      await loadTemplate(true);
       await syncFutureEventsWithTemplate(templateId);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
@@ -337,7 +356,7 @@ export default function EditTemplatePage() {
       if (!parentPost || !templateTask) return;
       await removeTemplateTaskFromFutureEvents(templateId, parentPost, templateTask);
       await deleteTemplateTask(taskId);
-      await loadTemplate();
+      await loadTemplate(true);
       await syncFutureEventsWithTemplate(templateId);
     } catch (err: any) {
       alert('Erreur: ' + err.message);
