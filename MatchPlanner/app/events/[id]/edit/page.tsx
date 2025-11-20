@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/hooks/useAuth';
-import { getEventWithDetails, updateEvent, createEventPost, createEventTask, updateEventPost, updateEventTask, deleteEventPost, deleteEventTask, countAttachmentsForTask, getAllAttachmentsForTask } from '@/lib/supabase/queries';
+import { getEventWithDetails, updateEvent, createEventPost, createEventTask, updateEventPost, updateEventTask, deleteEventPost, deleteEventTask, countAttachmentsForTask, getAllAttachmentsForTask, renameEventTask } from '@/lib/supabase/queries';
 import { supabase } from '@/lib/supabaseClient';
 import type { EventWithDetails, EventUpdate, EventPost, EventTask } from '@/lib/types/database';
 import { addDays } from '@/lib/utils/date';
@@ -398,6 +398,24 @@ export default function EditEventPage() {
     }
   }
 
+  async function handleTaskNameSave(postId: string, taskId: string, name: string) {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      alert('Le nom de la tâche ne peut pas être vide');
+      await loadEvent();
+      return;
+    }
+
+    setEventTaskField(postId, taskId, { name: trimmed });
+    try {
+      await renameEventTask(taskId, trimmed, user?.id, true);
+      await loadEvent();
+    } catch (err: any) {
+      alert('Erreur: ' + err.message);
+      await loadEvent();
+    }
+  }
+
   async function handleTaskResponsibleNameSave(postId: string, taskId: string, name: string) {
     const trimmed = name.trim() || null;
     setEventTaskField(postId, taskId, { responsible_name: trimmed || '' });
@@ -699,8 +717,8 @@ export default function EditEventPage() {
                         return (
                           <div key={task.id} className="p-3 bg-gray-50 rounded-lg space-y-3">
                             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                              <div className="space-y-1">
-                                <div className="flex items-center gap-2">
+                              <div className="space-y-1 flex-1">
+                                <div className="flex items-center gap-2 flex-wrap">
                                   {!isCompleted && (
                                     <>
                                       <StatusBadge color={taskColor} size="lg" />
@@ -715,11 +733,30 @@ export default function EditEventPage() {
                                       </span>
                                     </>
                                   )}
-                                  <span className="font-medium text-sm text-secondary">{task.name}</span>
                                   {isCompleted && (
                                     <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded">
                                       ✓ Complétée
                                     </span>
+                                  )}
+                                </div>
+                                <div>
+                                  <label className="block text-xs text-gray-600 mb-1">
+                                    Nom de la tâche {task.template_task_id && <span className="text-gray-400">(venant du modèle)</span>}
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={task.name}
+                                    onChange={(e) =>
+                                      setEventTaskField(post.id, task.id, { name: e.target.value })
+                                    }
+                                    onBlur={(e) => handleTaskNameSave(post.id, task.id, e.target.value)}
+                                    className="input text-sm font-medium"
+                                    disabled={isCompleted}
+                                  />
+                                  {task.template_task_id && (
+                                    <p className="text-[10px] text-gray-500 mt-1">
+                                      Cette modification sera appliquée au modèle et à toutes les tâches liées.
+                                    </p>
                                   )}
                                 </div>
                                 <div className="text-xs text-gray-400">

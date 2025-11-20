@@ -1243,6 +1243,55 @@ export async function deleteEventTask(id: string): Promise<void> {
 }
 
 /**
+ * Renomme une tâche d'événement.
+ * Si la tâche vient d'un modèle (template_task_id), met à jour le modèle et toutes les tâches liées.
+ * Sinon, met à jour uniquement la tâche manuelle.
+ */
+export async function renameEventTask(
+  taskId: string,
+  newName: string,
+  userId?: string,
+  trackChanges: boolean = false
+): Promise<void> {
+  // Récupérer la tâche pour vérifier si elle vient d'un modèle
+  const { data: task, error: taskError } = await supabase
+    .from('event_tasks')
+    .select('id, template_task_id, name')
+    .eq('id', taskId)
+    .single();
+
+  if (taskError) throw taskError;
+  if (!task) throw new Error('Tâche non trouvée');
+
+  const trimmedName = newName.trim();
+  if (!trimmedName) {
+    throw new Error('Le nom de la tâche ne peut pas être vide');
+  }
+
+  // Si la tâche vient d'un modèle, mettre à jour le modèle et toutes les tâches liées
+  if (task.template_task_id) {
+    // Mettre à jour le modèle
+    const { error: templateError } = await supabase
+      .from('template_tasks')
+      .update({ name: trimmedName })
+      .eq('id', task.template_task_id);
+
+    if (templateError) throw templateError;
+
+    // Mettre à jour toutes les tâches d'événement liées à ce modèle
+    const { error: eventTasksError } = await supabase
+      .from('event_tasks')
+      .update({ name: trimmedName })
+      .eq('template_task_id', task.template_task_id);
+
+    if (eventTasksError) throw eventTasksError;
+  } else {
+    // Tâche manuelle : mettre à jour uniquement cette tâche
+    await updateEventTask(taskId, { name: trimmedName }, userId, trackChanges);
+  }
+}
+
+/**
  * Marque une tâche comme complétée
  */
 export async function completeTask(taskId: string, userId: string): Promise<EventTask> {
